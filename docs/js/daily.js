@@ -10,7 +10,6 @@ import * as L from './labor.js';
 import { currentJob, upcoming } from './career.js';
 const hm = (m) => `${String(Math.floor(m / 60) % 24).padStart(2, '0')}:${String(Math.round(m) % 60).padStart(2, '0')}`;
 const fn = (p) => p.name.replace(/^Dr\.?\s*/i, '').split(' ')[0];
-const rec = (o) => Object.values(o || {});
 
 export const DAY_DEFAULTS = { sleepH: 8, prepMin: 90 };
 export const SLEEP_LIMITS = { sleepH: [4, 12], prepMin: [15, 240] };
@@ -79,7 +78,7 @@ export function briefingText(lines, now = new Date()) {
  *  Times are minutes of the shift's day; `bed` < 0 in the raw maths means the evening before. */
 export function windDown(s, now = new Date()) {
   const cfg = daySettings(s), early = now.getHours() < NIGHT_ENDS, day = early ? startOfDay(now) : addDays(startOfDay(now), 1), md = myDay(s, day), sh = md.today?.shift;
-  const when = early ? 'today' : 'tomorrow', dayWord = early ? 'Today' : 'Tomorrow';
+  const dayWord = early ? 'Today' : 'Tomorrow';
   if (!sh) return { work: false, dayWord, label: md.info.mine?.shift.kind === 'leave' ? 'On leave, no alarm needed' : md.noHours ? `${md.noHours.shift.label || md.noHours.code} (no hours in the rota: set your own alarm)` : md.info.hasRota && md.info.mine ? 'Day off, no alarm needed' : '', notes: [] };
   const start = sh.hours.start, wake = start - cfg.prepMin, night = sh.type === 'N' || start >= 17 * 60, bed = wake - cfg.sleepH * 60;
   // minutes from now until bedtime, counted on one clock: the evening before the shift's day is −1440…0 (beta T01-09)

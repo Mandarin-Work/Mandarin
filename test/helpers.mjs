@@ -32,7 +32,8 @@ async function pickRows() {
   const { parseRotaFile, serializeRota, interpretCode } = await import('../docs/js/rota-parser.js');
   const b = fs.readFileSync(data('main.xlsx')), r = serializeRota(await parseRotaFile(b.buffer.slice(b.byteOffset, b.byteOffset + b.length), 'main.xlsx'));
   const sh = (p, d) => interpretCode(p.days[d] || '', r.legend, 'gp');
-  const rows = r.people.filter(p => p.id).map(p => ({ p, n: [16, 17, 18, 19, 20, 21, 22].filter(d => sh(p, d).kind === 'work' && sh(p, d).hours).length + (sh(p, 16).kind === 'work' && sh(p, 16).hours ? 3 : 0) }));
+  const ward = (p, d) => /^[DNE][1-4]$/.test(String(p.days[d] || '').trim());   // a village / office-clinic shift, the owner's usual kind
+  const rows = r.people.filter(p => p.id).map(p => ({ p, n: [16, 17, 18, 19, 20, 21, 22].filter(d => ward(p, d)).length + (ward(p, 16) ? 3 : 0) + (Object.values(p.days).some(v => /^N[1-4]$/.test(v)) ? 2 : 0) }));
   const me = rows.sort((a, b) => b.n - a.n || a.p.id.localeCompare(b.p.id))[0].p, away = r.people.find(p => p.id && sh(p, 16).kind === 'work' && !sh(p, 16).hours);
   return { ME: { name: me.name, id: me.id }, AWAY: away ? { name: away.name, id: away.id } : null };
 }

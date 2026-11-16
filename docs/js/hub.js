@@ -5,7 +5,7 @@
 // Neither file carries pay, contracts, phone numbers or anything about patients.
 import { dayInfo, myDay } from './model.js';
 import { interpretCode } from './rota-parser.js';
-import { keyOf, addDays, startOfDay, fromKey } from './util.js';
+import { keyOf, addDays, startOfDay } from './util.js';
 import * as L from './labor.js';
 import * as SL from './shiftlog.js';
 import * as K from './creds.js';

@@ -32,7 +32,7 @@ import * as MV from './month-ui.js';
 import * as TV from './team-ui.js';
 import { shiftsIcs } from './ics.js';
 import { checkBackup, describeCounts } from './backup-check.js';
-import { h, toast, safeUrl, keyOf, fromKey, addDays, startOfDay, sameDay, fmtDate, fmtDateShort, fmtTime, fmtMin, fmtDur, relDay, pad2, DAY_SHORT, DAY_NAMES, MONTHS, telLink, firstName, atMin, minsOf, uid } from './util.js';
+import { h, toast, keyOf, fromKey, addDays, startOfDay, sameDay, fmtDate, fmtDateShort, fmtTime, fmtMin, fmtDur, relDay, pad2, DAY_SHORT, DAY_NAMES, MONTHS, telLink, firstName, atMin, minsOf, uid } from './util.js';
 
 export const VERSION = '1.0.0';
 const CITRUS_URL = 'https://amaerys.github.io/citrus-maxima/';
@@ -815,14 +815,6 @@ function personPill(entry, onClick) {
 function initials(name) { const parts = String(name).replace(/^Dr\.?\s*/i, '').split(/\s+/).filter(Boolean); return (parts[0]?.[0] || '') + (parts[1]?.[0] || ''); }
 function personKeyOf(p) { return p.id ? `id:${p.id}` : `name:${p.name.toLowerCase()}`; }
 
-function contactButtons(mobile) {
-  const t = telLink(mobile);
-  if (!t) return null;
-  return h('div', { class: 'row' },
-    h('a', { class: 'btn sm', href: t.tel }, '📞 Call'),
-    h('a', { class: 'btn sm', href: t.wa, target: '_blank', rel: 'noopener' }, '💬 WhatsApp'),
-    h('span', { class: 'small muted' }, t.display));
-}
 
 function personSheet(p) {
   const s = S();
@@ -833,7 +825,6 @@ function personSheet(p) {
   const saved = DIR.contactOf(key).phone, num = saved || p.mobile, digits = (x) => String(x || '').replace(/\D/g, '').replace(/^(966|0)/, '');
   const phoneLine = num ? h('div', { class: 'small muted' }, telLink(num)?.display || num, saved && p.mobile && digits(saved) !== digits(p.mobile) ? h('span', { class: 'dim' }, ` · rota: ${telLink(p.mobile)?.display || p.mobile}`) : null) : null;
   // days on together: GP colleagues share your site and shift; specialists cover your site; nurses can be posted with you (beta T01-26, T03-18)
-  const myCode = (d) => dayInfo(s, d).mine?.code || '';
   const hist = T.history(s).find(x => x.key === key), bal = SW.balances(s).find(b => b.name === p.name);
   const together = isGp ? T.nextWith(s, key, new Date(), 12).map(x => ({ date: x.date, label: x.code, how: '' }))
     : TM.daysWithMe(s, key, { nursesWithMe: (d, mine) => N.workingWithMe(s, d, mine) });
@@ -854,19 +845,6 @@ function personSheet(p) {
   sheet(content);
 }
 
-function miniMonth(rota, person) {
-  const grid = h('div', { class: 'cal' });
-  const first = new Date(rota.year, rota.month - 1, 1);
-  for (let i = 0; i < first.getDay(); i++) grid.append(h('div', { class: 'day pad' }));
-  for (let d = 1; d <= rota.daysInMonth; d++) {
-    const code = person.days[d] || '';
-    const shift = interpretFor(rota, code);
-    const cls = shift.kind === 'leave' ? 'leave' : shift.kind === 'off' ? 'off' : (shift.type && /^[DNE]$/.test(shift.type) ? shift.type : 'other');
-    grid.append(h('div', { class: 'day', onClick: () => { rt.rotaMonth = first; rt.rotaSel = new Date(rota.year, rota.month - 1, d); show('calendar'); topSheet()?.remove(); daySheet(rt.rotaSel); } },
-      h('span', { class: 'n' }, d), h('span', { class: `code ${cls}` }, shift.kind === 'off' ? '·' : shift.kind === 'leave' ? 'L' : code)));
-  }
-  return [h('div', { class: 'cal-head' }, ...DAY_SHORT.map(x => h('span', {}, x[0]))), grid];
-}
 function interpretFor(rota, code) { return interpretCode(code, rota.legend, rota.unitKind); }
 
 /** "Day · Upper Village 08:00–20:00", without saying the hours twice when the rota's label already has them ("SF shift (13:00–01:00)", beta T01-25). */
@@ -929,7 +907,7 @@ function dayDial(date) {
   const s = S();
   const k = keyOf(date);
   const blocks = citrusBlocks(date), { busy, today, overnightTail } = dayBusy(s, date, rt.events[k] || [], blocks);
-  const R = 100, C = 110, rOuter = 92, w = 14;
+  const C = 110, rOuter = 92, w = 14;
   const ang = (min) => (min / 1440) * 2 * Math.PI - Math.PI / 2;
   const pt = (r, min) => [C + r * Math.cos(ang(min)), C + r * Math.sin(ang(min))];
   const svgNS = 'http://www.w3.org/2000/svg';
@@ -1109,12 +1087,6 @@ function shiftBoard(info, md = null) {
       m.now != null ? h('div', { class: 'bd-overlay' }, h('i', { class: 'bd-now', style: { left: pct(m.now) } })) : null),
     m.rows.length > MAXROWS ? h('div', { class: 'dim tiny' }, `+${m.rows.length - MAXROWS} more at ${site}`) : null,
     m.rows.some(r => r.prev) ? h('div', { class: 'tiny dim bd-foot' }, 'Hatched bars started yesterday evening.') : null);
-}
-function countdown(w) {
-  const now = Date.now();
-  if (now < w.start) return h('div', { class: 'small orange', style: { marginTop: '4px' } }, `Starts in ${fmtDur(Math.round((w.start - now) / 60000))}`);
-  if (now < w.end) return h('div', { class: 'small orange', style: { marginTop: '4px' } }, `${fmtDur(Math.round((w.end - now) / 60000))} left`);
-  return h('div', { class: 'small muted', style: { marginTop: '4px' } }, 'Shift done ✓');
 }
 
 /** First run: one card, three steps (import → pick your row → sign in), instead of four "import" calls on one screen (beta T10-17). */

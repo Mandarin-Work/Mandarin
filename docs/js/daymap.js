@@ -7,8 +7,7 @@ import { keyOf, addDays, startOfDay, fmtMin } from './util.js';
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 export const PLANNER_DEFAULTS = { after12h: 'light', windDownMin: 60, breakMin: 15, napBeforeNight: true, recoveryWeekHours: 48 };
 const R = (rules) => ({ ...PLANNER_DEFAULTS, ...(rules || {}) });
-const NAP_COLOR = '#8b93ff';
-const ceil15 = (m) => Math.ceil(m / 15) * 15, floor15 = (m) => Math.floor(m / 15) * 15;
+const floor15 = (m) => Math.floor(m / 15) * 15;
 const memo = (cache, k, f) => { if (!cache) return f(); if (!cache.has(k)) cache.set(k, f()); return cache.get(k); };
 const myDayC = (state, date, cache) => memo(cache, 'my:' + keyOf(date), () => myDay(state, date));
 
