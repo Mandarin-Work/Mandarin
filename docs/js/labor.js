@@ -12,7 +12,7 @@ export const LAW = {
   annualDays: 21, annualDays5y: 30,      // after 5 continuous years
   hourlyDivisor: 240,   // basic monthly ÷ (30 × 8)
 };
-export const ARTICLE = { span: 'Art. 101', weekly: 'Art. 98', ramadan: 'Art. 98', rest: 'Art. 104', ot: 'Art. 107', holiday: 'Art. 107', daily: 'Art. 98', contract: 'Art. 98' };
+export const ARTICLE = { nohours: '', between: '', joined: 'Art. 101', span: 'Art. 101', weekly: 'Art. 98', ramadan: 'Art. 98', rest: 'Art. 104', ot: 'Art. 107', holiday: 'Art. 107', daily: 'Art. 98', contract: 'Art. 98' };
 export const DEFAULTS = { on: true, muslim: false, ramadan: ['2027-02-08', '2027-03-09'], hire: '', wage: 0, holidays: [] };
 /** Keys the current contract in Career supplies. settings.labor holds one only when the user typed a different value by hand. */
 export const CONTRACT_KEYS = ['hire', 'wage', 'leaveDays', 'weeklyH'];
@@ -80,6 +80,13 @@ export function checkMonth(state, y, m, cfgIn) {
     else if (span > LAW.dailyH) (long[span.toFixed(1)] ||= []).push(keyOf(w.date));
     if (isHoliday(cfg, w.date)) { add('info', 'holiday', w.date, `Worked on a public holiday: those hours count as overtime`); const dm = mins(w.start, w.end); holMin += dm; const wkKey = keyOf(addDays(w.date, -w.date.getDay())); holByWeek[wkKey] = (holByWeek[wkKey] || 0) + dm; }
   }
+  // back-to-back shifts: a short rest between two shifts, and shifts joined into one long stretch (a night then a day, beta T2-06)
+  const inMonth = wins.filter(w => w.date >= first && w.date < end).sort((x, y) => x.start - y.start);
+  for (let i = 1; i < inMonth.length; i++) {
+    const a = inMonth[i - 1], b = inMonth[i], gapH = (b.start - a.end) / 3600000; if (gapH >= 11) continue;
+    if (gapH < 1 && mins(a.start, b.end) / 60 > LAW.spanH) add('violation', 'joined', b.date, `${dayLabel(a.date)} and ${dayLabel(b.date)} run together: ${(mins(a.start, b.end) / 60).toFixed(1)}h from start to finish with ${Math.max(0, Math.round(gapH * 60))} min between`);
+    else add('warn', 'between', b.date, `Only ${Math.max(0, Math.round(gapH * 10) / 10)}h of rest between the shift ending ${dayLabel(a.date)} and the next one`);
+  }
   for (const [hrs, dates] of Object.entries(long)) findings.push({ level: 'info', rule: 'daily', article: ARTICLE.daily, date: dates[0], dates, label: `${dates.length} ×`, msg: `${(+hrs).toFixed(hrs.endsWith('.0') ? 0 : 1)}h shift${dates.length > 1 ? 's' : ''}: over ${LAW.dailyH}h a day, fine inside a ${LAW.weeklyH}h week (normal for 12h clinical shifts)` });
   let otMin = 0, restBad = 0, legalOver = 0;
   for (let a = new Date(ws); a < end; a = addDays(a, 7)) {
@@ -92,16 +99,21 @@ export function checkMonth(state, y, m, cfgIn) {
     // longest stretch with no work, counting the ends of the week
     let gap = 0, cur = +a; for (const w of inWeek) { gap = Math.max(gap, w.start - cur); cur = Math.max(cur, w.end); } gap = Math.max(gap, +b - cur);
     const restOk = gap >= LAW.restH * 3600000, inMonthDays = Array.from({ length: 7 }, (_, i) => addDays(a, i)).filter(d => d >= first && d < end).length, wl = `Week of ${weekLabel(a)}`;
-    if (inMonthDays === 7) { // only judge whole weeks inside the month so a partial week at either edge never raises a false alarm
+    // each Sun–Sat week is judged once, in the month where it ends: a week that spans two months was never judged at all before (beta T4-16)
+    const judged = addDays(a, 6) >= first && addDays(a, 6) < end;
+    if (judged) {
       otMin += Math.max(0, Math.round(worked - (holByWeek[keyOf(a)] || 0) - cap * 60)); if (overLegal > 0) legalOver++;
       const also = cap < legal && overLegal > 0 ? `, ${r10(overLegal)}h over the legal ${legal}h` : '';
       if (over > 0) add('warn', ram ? 'ramadan' : 'weekly', a, `${r10(h)}h worked (Sun–Sat): ${r10(over)}h over the ${ram ? `${cap}h Ramadan` : capName} limit${also}`, wl);
       if (!restOk) { restBad++; add('violation', 'rest', a, `No 24 consecutive hours off (Sun–Sat)`, wl); }
     }
-    weeks.push({ start: keyOf(a), hours: Math.round(worked / 6) / 10, cap, legal, over: r10(over), overLegal: r10(overLegal), restOk, full: inMonthDays === 7, ram });
+    weeks.push({ start: keyOf(a), hours: Math.round(worked / 6) / 10, cap, legal, over: r10(over), overLegal: r10(overLegal), restOk, full: judged, inMonthDays, ram });
   }
+  // days worked on a code with no hours (a posting): the weeks they fall in cannot be checked, so the card must not say "All clear" (beta T2-07)
+  let noHours = 0; for (let d = new Date(first); d < end; d = addDays(d, 1)) { const m = dayInfo(state, d).mine; if (m?.shift.kind === 'work' && !m.shift.hours) noHours++; }
+  if (noHours) add('warn', 'nohours', null, `${noHours} working day${noHours > 1 ? 's have' : ' has'} no hours in the rota: those days cannot be checked`, 'Not checked');
   otMin += holMin; const ot = Math.round(otMin / 6) / 10, rate = otRate(cfg);
-  const totals = { overtimeH: ot, compLeaveH: Math.round(ot * LAW.compLeaveH * 10) / 10, otPay: rate ? Math.round(ot * rate) : null, otRate: rate || null, restBad, legalOver, cap: wk, capName };
+  const totals = { noHours, overtimeH: ot, compLeaveH: Math.round(ot * LAW.compLeaveH * 10) / 10, otPay: rate ? Math.round(ot * rate) : null, otRate: rate || null, restBad, legalOver, cap: wk, capName };
   const rank = { violation: 0, warn: 1, info: 2 };
   const level = findings.some(f => f.level === 'violation') ? 'violation' : findings.some(f => f.level === 'warn') ? 'warn' : 'ok';
   return { weeks, findings: findings.sort((p, q) => rank[p.level] - rank[q.level] || p.date.localeCompare(q.date)), totals, level, cfg };

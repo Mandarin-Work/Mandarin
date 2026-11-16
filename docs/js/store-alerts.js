@@ -31,7 +31,7 @@ export function showStoreAlerts({ recovery, persistence, corruptCopy, dismissRec
   if (rec && !document.querySelector('.d10-alert[data-id="recovery"]') && !rec.shown) {
     rec.shown = true;
     const damaged = rec.reason === 'unreadable';
-    const from = rec.from?.length ? `Recovered from ${rec.from.map(f => f === 'backup' ? 'this device\'s last clean copy' : 'the part that could still be read').join(' and ')}.` : 'Nothing could be read from it, so Citrus started empty.';
+    const from = rec.from?.length ? `Recovered from ${rec.from.map(f => f === 'backup' ? 'this device\'s last clean copy' : 'the part that could still be read').join(' and ')}.` : 'Nothing could be read from it, so Mandarin started empty.';
     banner('recovery', {
       tone: damaged ? 'err' : 'warn',
       title: damaged ? 'Your saved data on this device was damaged' : `Mandarin skipped ${rec.fixed} damaged item${rec.fixed === 1 ? '' : 's'}`,

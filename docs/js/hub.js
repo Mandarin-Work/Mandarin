@@ -41,7 +41,9 @@ export function buildShifts(s, now = new Date()) {
       const key = p.id ? `id:${p.id}` : `name:${String(p.name).toLowerCase()}`;
       for (const [d, code] of Object.entries(p.days || {})) {
         const k = `${r.year}-${String(r.month).padStart(2, '0')}-${String(d).padStart(2, '0')}`; if (k < first || k > last || !code) continue;
-        const row = (roster[key] ||= { name: p.name, unit: r.unitKind, days: {} }); row.days[k] = String(code).slice(0, 24);
+        const row = (roster[key] ||= { name: p.name, unit: r.unitKind, days: {} });
+        // a code from the legend, or only what kind of day it is: free text like "END OF CONTRACT" or "PULL OUT - <name>" is HR detail other apps don't need (T5-17)
+        const c = String(code).trim(); row.days[k] = r.legend?.[c] ? c.slice(0, 12) : (() => { const kd = interpretCode(c, r.legend || {}, r.unitKind).kind; return kd === 'work' || kd === 'leave' || kd === 'off' ? kd : 'other'; })();
       }
     }
   }
@@ -60,7 +62,8 @@ export function buildStatus(s, now = new Date(), extra = {}) {
   const bits = [];
   if (tail) bits.push(`on ${tail.code} until ${hm(tail.window.end.getHours() * 60 + tail.window.end.getMinutes())}`);
   if (today) bits.push(`today ${shiftWords(today)}`); else if (!s.me) bits.push('pick your row in Mandarin'); else bits.push('no rota for today');
-  if (tmr) bits.push(`tomorrow ${shiftWords(tmr)}`);
+  const nightToday = today?.kind === 'work' && today.type === 'N';
+  if (tmr) bits.push(nightToday && tmr.kind !== 'work' ? `tomorrow post-night (off from ${today.end || 'morning'})` : `tomorrow ${shiftWords(tmr)}`);
   // this Sunday–Saturday week against the weekly limit
   const ws = addDays(startOfDay(now), -startOfDay(now).getDay()), we = addDays(ws, 7); let mins = 0;
   for (const w of L.windows(s, ws, we)) mins += Math.max(0, Math.min(w.end, we) - Math.max(w.start, ws)) / 60000;
@@ -70,7 +73,7 @@ export function buildStatus(s, now = new Date(), extra = {}) {
   for (let d = 1; d <= dim; d++) { const x = dayOut(s, new Date(y, m, d)); if (x?.kind === 'work') { if (x.type === 'N') nights++; if (x.date >= keyOf(now)) left++; } }
   const pending = [], inbox = [];
   const unlogged = SL.unlogged(s, now, 3); if (unlogged.length) pending.push(`${unlogged.length} shift${unlogged.length > 1 ? 's' : ''} to log`);
-  for (const c of K.dueSoon(s, now, 45)) pending.push(`${c.name} ${c.days < 0 ? 'expired' : `expires in ${c.days} d`}`);
+  for (const c of K.dueSoon(s, now, K.WARN_DAYS)) pending.push(`${c.name} ${K.dueWords(c.days)}`);
   if (extra.unposted) pending.push(`${extra.unposted} nurses not posted for tomorrow`);
   if (extra.inbox) pending.push(`${extra.inbox} proposal${extra.inbox > 1 ? 's' : ''} waiting in Mandarin`);
   if (extra.nextMonthMissing) pending.push(`${extra.nextMonthMissing} rota not loaded yet`);
@@ -89,6 +92,8 @@ export function buildStatus(s, now = new Date(), extra = {}) {
     { id: 'calendar', label: 'Calendar', url: `${base}#calendar`, icon: '📅' },
     { id: 'nurses', label: 'Post nurses', url: `${base}#nurses`, icon: '💉', minutes: 5 },
     { id: 'log', label: 'Log last shift', url: `${base}#log`, icon: '📝', minutes: 2 },
+    { id: 'leave', label: 'Plan leave', url: `${base}?do=leave`, icon: '🏖' },
+    { id: 'month', label: 'This month', url: `${base}#month`, icon: '📊' },
   ];
   const doneToday = !today || today.kind !== 'work' || (md.today && now >= md.today.window.end && !!s.shiftLog?.[keyOf(now)]);
   return {
@@ -97,6 +102,6 @@ export function buildStatus(s, now = new Date(), extra = {}) {
     summary: bits.join(' · ').slice(0, 140),
     today: { date: keyOf(now), done: !!doneToday },
     next, metrics, pending: pending.slice(0, 10), inbox, actions,
-    extra: { weekHours: weekH, weekCap: cap, today, tomorrow: tmr, nurses: N.nurseRotas(s).length > 0 },
+    extra: { weekHours: weekH, weekCap: cap, today, tomorrow: tmr, postNightUntil: nightToday ? `${keyOf(addDays(startOfDay(now), 1))}T${today.end || '08:00'}` : (tail ? tail.window.end.toISOString() : null), nurses: N.nurseRotas(s).length > 0 },
   };
 }

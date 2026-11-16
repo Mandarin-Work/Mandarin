@@ -127,4 +127,39 @@ await t('store: new collections merge record by record with tombstones', () => {
   const b = { ...base, updatedAt: 2, payslips: { '2026-09': { net: 2, at: 2 } }, creds: {}, deleted: { 'cred:c': 9 }, favs: {} };
   const m = ST.mergeStates(a, b); assert.ok(m.payslips['2026-10'] && m.payslips['2026-09']); assert.ok(!m.creds.c, 'deleted on the other device'); assert.ok(m.favs['id:2'], 'a fav with no tombstone survives');
 });
+
+await t('beta T5: one clock — an edit on a device whose clock is behind still wins; tombstones too', () => {
+  const ahead = Date.now() + 600000;
+  ST.replaceState({ ...base, swaps: { '2026-11-28': { code: 'D1', note: 'A', at: ahead } }, deleted: {} });
+  ST.update(s => ({ ...s, swaps: { ...s.swaps, '2026-11-28': { ...s.swaps['2026-11-28'], note: 'C later', at: Date.now() } } }));
+  assert.ok(ST.get().swaps['2026-11-28'].at > ahead, 'the later edit is stamped past everything seen');
+  const remote = { ...base, updatedAt: ahead, swaps: { '2026-11-28': { code: 'D1', note: 'A', at: ahead } } };
+  assert.equal(ST.mergeStates(ST.get(), remote).swaps['2026-11-28'].note, 'C later');
+  ST.update(s => { const m = { ...s.swaps }; delete m['2026-11-28']; return { ...s, swaps: m, deleted: ST.tombstone(s, 'swap:2026-11-28') }; });
+  assert.ok(!ST.mergeStates(ST.get(), remote).swaps['2026-11-28'], 'a delete on the slow device holds');
+});
+await t('beta T5: Replace and Undo hold after a sync (tombstones for what went away)', () => {
+  const t0 = Date.now();
+  ST.replaceState({ ...base, swaps: { a: { code: 'D1', at: t0 }, b: { code: 'D2', at: t0 } }, deleted: {} });
+  const other = ST.get(), before = ST.get();
+  ST.replaceState({ ...base, swaps: { a: { code: 'D1', at: t0 } } }, { bump: true, exact: before });
+  assert.ok(!ST.mergeStates(ST.get(), other).swaps.b, 'a record the backup did not have stays gone');
+  const cur = ST.get(); ST.replaceState(before, { bump: true, exact: cur });
+  assert.ok(ST.mergeStates(ST.get(), cur).swaps.b, 'Undo brings it back for good');
+});
+await t('beta T5: imports — Citrus backups are spotted, foreign keys dropped, no Drive folder carried over', async () => {
+  assert.ok(MIG.looksLikeCitrus({ rotas: {}, contacts: {} }) && MIG.looksLikeCitrus({ rotas: {} }) && !MIG.looksLikeCitrus({ app: 'mandarin', rotas: {} }));
+  const BC = await import('../docs/js/backup-check.js');
+  const r = BC.checkBackup({ app: 'mandarin', rotas: {}, swaps: {}, contacts: { x: { phone: '1' } }, memos: {} });
+  assert.ok(r.ok && !('contacts' in r.state) && !('memos' in r.state));
+  const w = MIG.workPart({ rotas: { [gp.id]: gp }, settings: { driveFolder: 'Citrus Maxima', clientId: 'x' }, inboxLog: { 'claude:sw-dis': { status: 'dismissed', at: 1 } }, deleted: { 'slog:2026-11-10:bio': 5 } });
+  assert.ok(!('driveFolder' in (w.part.settings || {})) && !('clientId' in (w.part.settings || {})));
+  assert.ok(w.part.inboxLog?.['claude:sw-dis'], 'a dismissed proposal stays dismissed'); assert.ok(!w.part.deleted?.['slog:2026-11-10:bio'], 'Citrus study-log tombstones stay out');
+});
+await t('beta T5: shifts.json roster carries legend codes or the kind of day, never free text', () => {
+  const g2 = { ...gp, people: [...gp.people, { name: 'Dr Free Text', id: '9', days: { 9: 'END OF CONTRACT', 10: 'D1' } }] };
+  const sh = HUB.buildShifts({ ...base, rotas: { [g2.id]: g2 } }, new Date(2026, 10, 9, 12));
+  assert.equal(sh.roster['id:9'].days['2026-11-10'], 'D1'); assert.ok(!/CONTRACT/.test(JSON.stringify(sh)));
+  const st = HUB.buildStatus(base, new Date(2026, 10, 4, 9, 30)); assert.match(st.summary, /today N1/); assert.ok(st.actions.length <= 6 && st.actions.some(a => a.id === 'leave'));
+});
 if (fails) { console.log(`${fails} FAILED`); process.exit(1); }

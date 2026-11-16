@@ -4,6 +4,7 @@ import * as P from './payslips.js';
 import * as K from './creds.js';
 import * as CV from './cv.js';
 import { currentJob, total } from './career.js';
+import { revert } from './store.js';
 
 let ctx = null;
 export function initCareerPlus(c) { ctx = c; }
@@ -14,7 +15,8 @@ const ymLabel = (k) => { const [y, m] = k.split('-').map(Number); return `${MONT
 const fd = (k) => { if (!k) return ''; const d = fromKey(k); return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`; };
 const sar = (n) => `${Math.round(n).toLocaleString('en-GB')} SAR`;
 const errBox = () => h('div', { class: 'tiny field-err', 'aria-live': 'polite' });
-const undo = (msg, before, key, coll) => toast(msg, 'ok', { action: { label: 'Undo', run: () => ctx.update(x => ({ ...x, [coll]: { ...(x[coll] || {}), [key]: before } })) } });
+const PREFIX = { payslips: 'pay', creds: 'cred', cme: 'cme' };
+const undo = (msg, before, key, coll) => toast(msg, 'ok', { action: { label: 'Undo', run: () => ctx.update(x => revert(x, coll, PREFIX[coll], key, before)) } });
 
 // ───────── Pay
 export function renderPay() {

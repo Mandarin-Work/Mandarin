@@ -13,11 +13,13 @@ const H = 3600000;
  *  first, so an hour is never paid twice. */
 export function monthReport(s, y, m) {
   const days = new Date(y, m, 0).getDate(), cfg = L.settings(s), chk = L.checkMonth(s, y, m, cfg);
-  let work = 0, nights = 0, mins = 0, weekend = 0, holiday = 0, leave = 0, streak = 0, best = 0, holMin = 0; const sites = {}, types = {}, holByWeek = {};
+  let work = 0, nights = 0, mins = 0, weekend = 0, holiday = 0, leave = 0, streak = 0, best = 0, holMin = 0, noHours = 0, timed = 0; const sites = {}, types = {}, holByWeek = {}, away = {};
   for (let d = 1; d <= days; d++) {
     const date = new Date(y, m - 1, d), mi = mineOn(s, date);
     if (isWork(mi)) {
       work++; streak++; best = Math.max(best, streak); const dm = mi.shift.hours?.durationMin || 0; mins += dm;
+      // a posting with no hours in the rota (Riyadh Season, a project) is counted apart: never an 0h shift in the average (beta T2-07)
+      if (!mi.shift.hours) { noHours++; away[mi.code || mi.shift.label] = (away[mi.code || mi.shift.label] || 0) + 1; continue; } timed++;
       if (mi.shift.type === 'N' || mi.shift.hours?.overnight) nights++; if ([5, 6].includes(date.getDay())) weekend++;
       if (L.isHoliday(cfg, date)) { holiday++; holMin += dm; const wk = keyOf(addDays(date, -date.getDay())); holByWeek[wk] = (holByWeek[wk] || 0) + dm; }
       const st = mi.shift.site || mi.shift.label; sites[st] = (sites[st] || 0) + 1; types[mi.shift.type] = (types[mi.shift.type] || 0) + 1;
@@ -30,7 +32,7 @@ export function monthReport(s, y, m) {
   const otRate = t.overtimeH && t.otPay != null ? t.otPay / t.overtimeH : hourlyBasic ? hourlyBasic * L.LAW.otFactor : null;
   return { y, m, work, nights, weekend, holiday, holidayH: Math.round(holMin / 6) / 10, leave, off: days - work - leave, hours, longestStreak: best, sites, types,
     overtimeH, compLeaveH: Math.round(overtimeH * L.LAW.compLeaveH * 10) / 10, otPay: otRate != null ? Math.round(overtimeH * otRate) : null, otRate: otRate != null ? Math.round(otRate * 100) / 100 : null,
-    lawOn: cfg.on !== false, level: chk.level, flags: chk.findings.filter(f => f.level !== 'info').length, avgShiftH: work ? Math.round(mins / work / 6) / 10 : 0, basic: cfg.wage || 0, hourlyBasic: Math.round(hourlyBasic * 100) / 100 };
+    lawOn: cfg.on !== false, level: chk.level, flags: chk.findings.filter(f => f.level !== 'info').length, avgShiftH: timed ? Math.round(mins / timed / 6) / 10 : 0, noHours, away, basic: cfg.wage || 0, hourlyBasic: Math.round(hourlyBasic * 100) / 100 };
 }
 
 // ───────── leave
@@ -139,9 +141,16 @@ export function swapOptions(s, date, { span = 14, now = new Date() } = {}) {
 /** Pencil planned leave into your own corrections (state.swaps), so the calendar, labor check and leave balance all see it.
  *  Each request keeps its own `leaveId`, so two requests that touch stay two rows. Days that are already leave are skipped and counted apart. */
 export function applyLeave(s, from, to, now = Date.now(), id = uid()) {
-  const swaps = { ...(s.swaps || {}) }; let n = 0, already = 0;
-  for (let d = startOfDay(from); d <= startOfDay(to); d = addDays(d, 1)) { const k = keyOf(d), mi = dayInfo(s, d).mine; if (mi?.shift.kind === 'leave' || isPlanned(swaps[k])) { already++; continue; } swaps[k] = { code: 'VL', with: '', note: 'Planned leave', at: now, leaveId: id }; n++; }
-  return { state: { ...s, swaps }, days: n, already, id };
+  // a day with your own correction (a cover, swap, cancelled shift, rota fix) is never overwritten by planned leave: it is kept
+  // and reported, so the who-owes-whom history cannot be lost to a leave plan (beta T2-01)
+  const swaps = { ...(s.swaps || {}) }, deleted = { ...(s.deleted || {}) }; let n = 0, already = 0; const kept = [];
+  for (let d = startOfDay(from); d <= startOfDay(to); d = addDays(d, 1)) {
+    const k = keyOf(d), mi = dayInfo(s, d).mine;
+    if (mi?.shift.kind === 'leave' || isPlanned(swaps[k])) { already++; continue; }
+    if (swaps[k]) { kept.push(k); continue; }
+    swaps[k] = { code: 'VL', with: '', note: 'Planned leave', kind: 'leave', at: now, leaveId: id }; delete deleted[`swap:${k}`]; n++;
+  }
+  return { state: { ...s, swaps, deleted }, days: n, already, kept, id };
 }
 /** Remove planned leave in [from, to]; with `id`, only that request (older entries without an id go by range). */
 export function clearLeave(s, from, to, id) {

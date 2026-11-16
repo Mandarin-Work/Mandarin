@@ -59,7 +59,7 @@ const S = () => store.get();
 async function boot() {
   applyTheme(); watchSheets();
   rt.rotaMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
-  for (const b of document.querySelectorAll('nav.tabs button')) b.addEventListener('click', () => show(b.dataset.view));
+  for (const b of document.querySelectorAll('nav.tabs button')) b.addEventListener('click', () => go(b.dataset.view));
   $('#btnRefresh').addEventListener('click', () => refreshAll(true));
   $('#btnMore').addEventListener('click', () => show('more'));
   $('#btnSearch').addEventListener('click', () => openSearch());
@@ -123,7 +123,8 @@ function handleIncoming() {
   try {
     const q = new URLSearchParams(location.search);
     const from = String(q.get('from') || '').toLowerCase(), action = String(q.get('do') || '').toLowerCase();
-    if (from === 'citrus') rt.fromCitrus = true;
+    if (from === 'citrus') { rt.fromCitrus = true; try { sessionStorage.setItem('mandarin.fromCitrus', '1'); } catch {} }
+    else { try { if (sessionStorage.getItem('mandarin.fromCitrus')) rt.fromCitrus = true; } catch {} }   // kept over a reload (T5-19)
     if (q.get('shared') === '1') rt.sharedPending = true;
     const target = DO[action] || DO[location.hash.replace('#', '')] || null;
     if (q.toString()) history.replaceState(null, '', location.pathname + (target ? `#${target[0]}` : location.hash || '#today'));
@@ -131,7 +132,8 @@ function handleIncoming() {
     if (target?.[1] === 'log') setTimeout(() => { const a = SL.unlogged(S(), new Date(), 3)[0]; if (a) DU.logSheet(a.key); else toast('No shift waiting to be logged'); }, 300);
     const text = [q.get('title'), q.get('text')].filter(Boolean).join('\n');
     // a WhatsApp posting message shared to Mandarin: open Paste postings with it (never saved without a tap)
-    if (text && /\b(UPV|LPV|UPO|LPO|upper|lower|village|office clinic|posting|posted)\b/i.test(text)) setTimeout(() => { go('nurses'); PU.pasteFromShare(text); }, 400);
+    if (text && rt.sharedPending) rt.sharedText = text;   // shared with files: the caption is only the file's description (T5-12)
+    else if (text && /\b(UPV|LPV|UPO|LPO|upper|lower|village|office clinic|posting|posted)\b/i.test(text)) setTimeout(() => { go('nurses'); PU.pasteFromShare(text); }, 400);
   } catch (e) { console.warn('incoming', e); }
 }
 /** Files shared to Mandarin from WhatsApp or Files (Web Share Target): the service worker keeps them for one read. */
@@ -144,6 +146,8 @@ async function takeSharedFiles() {
     const c = await caches.open('mandarin-share'), keys = await c.keys(), files = [];
     for (const k of keys) { const r = await c.match(k); if (r) { const b = await r.blob(); files.push(new File([b], decodeURIComponent(new URL(k.url).pathname.split('/').pop() || 'rota.xlsx'), { type: b.type })); } await c.delete(k); }
     const xlsx = files.filter(f => /\.xlsx$/i.test(f.name) || /spreadsheet/.test(f.type));
+    const text = rt.sharedText; rt.sharedText = '';
+    if (!files.length && text && /\b(UPV|LPV|UPO|LPO|upper|lower|village|office clinic|posting|posted)\b/i.test(text)) { go('nurses'); PU.pasteFromShare(text); return; }
     if (xlsx.length) { go('calendar'); importFiles(xlsx); } else if (files.length) toast('Only .xlsx rota files can be shared to Mandarin', 'err');
   } catch (e) { console.warn('shared files', e); toast('Could not read the shared file', 'err'); }
 }
@@ -174,7 +178,7 @@ function applyTabs(c) {
 function go(view, part) {
   if (view === 'career' && part) RU.careerTab(part);
   if (view === 'month' && part) MV.monthPart(part);
-  if (view === 'nurses' && part instanceof Date) PU.goNurses(part);
+  if (view === 'nurses') { if (part instanceof Date) PU.goNurses(part); else PU.nursesNow(); }
   if (view === 'team' && part) TV.teamPart(part);
   show(view);
   if (view === 'month' && part === 'leave') setTimeout(() => XU.leaveSheet(), 50);
@@ -241,6 +245,7 @@ async function saveStateNow() {
   saving = (async () => {
     const root = S().settings.driveFolder;
     rt.saveDirty = false;
+    if (store.needsMerge()) await pullState(true);              // a copy recovered from damage never goes out before Drive's is merged in
     try { await G.saveRemoteState(root, stripForRemote(S())); }
     catch (e) {
       if (!e.conflict) { rt.saveDirty = true; throw e; }
@@ -258,12 +263,13 @@ const comparable = (s) => G.fingerprint(stripForRemote(s || {}), ['updatedAt']);
 /** Read state.json and merge it in. Writes back only if the merged copy holds something Drive doesn't. */
 async function pullState(fromConflict = false) {
   const remote = await G.loadRemoteState(S().settings.driveFolder);
-  if (!remote) { scheduleRemoteSave(); return false; }
+  if (!remote) { store.merged(); scheduleRemoteSave(); return false; }
   if (!remote.rotas || typeof remote.rotas !== 'object') throw new Error('state.json on Drive is unreadable — kept your copy (backups are in hub/mandarin/backups)');
   // same content, or the same edit time (this copy already holds that save; device-only tweaks don't bump the time,
   // and two devices must never bounce those back and forth)
   // (after a conflict the merge always runs: someone else's save is known to be missing here)
-  if ((!fromConflict && (remote.updatedAt || 0) === (S().updatedAt || 0)) || comparable(remote) === comparable(S())) return false;
+  const force = fromConflict || store.needsMerge(); store.merged();
+  if ((!force && (remote.updatedAt || 0) === (S().updatedAt || 0)) || comparable(remote) === comparable(S())) return false;
   const merged = mergeStates(S(), remote);
   // a merge that holds something Drive doesn't is a new version: one past both, so every other device sees it as new
   merged.updatedAt = Math.max(S().updatedAt || 0, remote.updatedAt || 0) + (comparable({ ...merged, updatedAt: 0 }) !== comparable({ ...remote, updatedAt: 0 }) ? 1 : 0);
@@ -401,17 +407,18 @@ function restoreSheet(json, { source = 'Backup file' } = {}) {
 }
 function applyRestore(next, { merge = false } = {}) {
   const before = S(), kept = keepPreRestore();
+  backupBefore(merge ? 'merge' : 'restore');
   const target = merge ? { ...mergeStates(before, next), updatedAt: Math.max(before.updatedAt || 0, next.updatedAt || 0) } : { ...next, outbox: before.outbox, google: before.google };
   try { store.replaceState(target); smokeRender(); }
   catch (e) { console.warn('restore rolled back', e); store.replaceState(before); dropPreRestore(); render(); toast(`That backup would break the app (${String(e.message).slice(0, 60)}). Nothing was changed.`, 'err'); return false; }
-  store.replaceState(S(), { bump: true });   // only a state that draws is sent on to your other devices
+  store.replaceState(S(), { bump: true, exact: merge ? null : before });   // only a state that draws is sent on to your other devices
   render();
   toast(h('span', {}, merge ? 'Merged' : 'Restored', kept ? '' : ' (undo copy kept until you close the app)', ' · ', h('button', { class: 'linkish', onClick: undoRestore }, 'Undo')), 'ok');
   return true;
 }
 function undoRestore() {
   const snap = preRestore(); if (!snap?.state) { toast('Nothing to undo'); return; }
-  store.replaceState(snap.state, { bump: true }); dropPreRestore(); render(); toast(`Back to your data from ${when(snap.at)}`, 'ok');
+  store.replaceState(snap.state, { bump: true, exact: S() }); dropPreRestore(); render(); toast(`Back to your data from ${when(snap.at)}`, 'ok');
 }
 async function repairSheet() {
   const body = h('div', {}, h('div', { class: 'muted small' }, 'Looking through Drive › ' + S().settings.driveFolder + '…'));
@@ -696,11 +703,24 @@ async function syncHub({ full = false } = {}) {
 }
 /** Proposals waiting for Mandarin: postings, swaps and nurse notes from the Claude inbox. */
 function inboxItems() { return IN.pending(S(), rt.hub.claude ? { claude: rt.hub.claude } : {}, new Date()); }
-function acceptInbox(p) {
-  const res = IN.accept(S(), p); store.update(() => res.state);
-  if (p.item.type === 'posting') toast(`${res.placed} posting${res.placed === 1 ? '' : 's'} saved as heard${p.item.from ? ` from ${p.item.from}` : ''}${res.missed?.length ? ` · not matched: ${res.missed.join(', ')}` : ''}`, res.missed?.length ? 'err' : 'ok');
+function acceptInbox(p, confirmed = false) {
+  // a swap changes your shift: say what changes first, warn about an unknown colleague, and keep an Undo (beta T1-18)
+  if (p.item.type === 'swap' && !confirmed) {
+    const v = IN.checkSwap(S(), p.item); if (v.error) return toast(v.error, 'err');
+    const d = fromKey(p.item.date), { close } = sheet([h('h2', {}, `Apply this swap on ${DAY_NAMES[d.getDay()]} ${fmtDate(d)}?`),
+      h('div', { class: 'kv' }, h('b', {}, 'Rota'), h('span', {}, v.before), h('b', {}, 'Becomes'), h('span', {}, v.after), p.item.with ? h('b', {}, 'With') : null, p.item.with ? h('span', {}, p.item.with) : null),
+      v.withKnown ? null : h('div', { class: 'small late', style: { margin: '8px 0' } }, `${p.item.with} is not in the rota: check the name.`),
+      p.item.note ? h('div', { class: 'small muted', style: { margin: '6px 0' } }, p.item.note) : null,
+      h('div', { class: 'row wrap sh-foot' }, h('button', { class: 'btn primary grow', onClick: () => { close(); acceptInbox(p, true); } }, 'Apply swap'), h('button', { class: 'btn ghost', onClick: () => close() }, 'Not now'))]);
+    return;
+  }
+  const before = S(), res = IN.accept(before, p); if (res.error) return toast(res.error, 'err');
+  store.update(() => res.state);
+  const touched = (coll) => [...new Set([...Object.keys(before[coll] || {}), ...Object.keys(res.state[coll] || {})])].filter(k => before[coll]?.[k] !== res.state[coll]?.[k]);
+  const undo = { action: { label: 'Undo', run: () => store.update(s => { let x = s; for (const [coll, pre] of [['swaps', 'swap'], ['posts', 'post']]) for (const k of touched(coll)) x = store.revert(x, coll, pre, k, before[coll]?.[k]); const log = { ...(x.inboxLog || {}) }; delete log[p.ref]; return { ...x, inboxLog: log, settings: p.item.type === 'nurse' ? before.settings : x.settings }; }) } };
+  if (p.item.type === 'posting') toast(`${res.placed} posting${res.placed === 1 ? '' : 's'} saved as heard${p.item.from ? ` from ${p.item.from}` : ''}${res.missed?.length ? ` · not matched: ${res.missed.join(', ')}` : ''}`, res.missed?.length ? 'err' : 'ok', undo);
   else if (p.item.type === 'nurse') toast(res.missed ? `No single nurse matches "${p.item.nurse}" on your nurse sheets` : `${res.name}: ${p.item.canLead ? 'can be team leader' : 'no longer marked as a possible leader'}`, res.missed ? 'err' : 'ok');
-  else if (p.item.type === 'swap') toast(`Swap saved for ${fmtDate(fromKey(p.item.date))}${p.item.with ? ` with ${p.item.with}` : ''}`, 'ok');
+  else if (p.item.type === 'swap') toast(`Swap saved for ${fmtDate(fromKey(p.item.date))}${p.item.with ? ` with ${p.item.with}` : ''}`, 'ok', undo);
 }
 /** Blocks Citrus planned for a day, in minutes from midnight, for the dial and the day sheet. */
 function citrusBlocks(d) {
@@ -712,7 +732,7 @@ function citrusBlocks(d) {
 // Citrus's work data, taken over once: shown first, applied on a tap (nothing is written without one)
 let migrationOffered = false;
 function offerMigration(citrus, source) {
-  const { counts } = MIG.workPart(citrus); if (!Object.keys(counts).length || migrationOffered) return;
+  const { counts } = MIG.workPart(citrus); if (!Object.values(counts).some(n => n > 0)) { if (source !== 'Citrus on Drive') toast(`Nothing work-related in ${source}`); return; } if (migrationOffered) return;
   migrationOffered = true;
   setTimeout(() => {
     const { close } = sheet([h('h2', {}, 'Bring your work over from Citrus?'),
@@ -721,12 +741,14 @@ function offerMigration(citrus, source) {
       h('div', { class: 'row wrap sh-foot' }, h('button', { class: 'btn primary grow', onClick: () => { close(); runMigration(citrus, source); } }, 'Bring it over'), h('button', { class: 'btn ghost', onClick: () => { close(); store.update(s => ({ ...s, migrated: { from: 'skipped', at: Date.now(), counts: {} } })); toast('Skipped. You can do it later in Settings › Data.'); } }, 'Not now'))]);
   }, 300);
 }
+function backupBefore(what) { if (rt.signedIn || S().google?.connected) G.backupBefore(S().settings.driveFolder, stripForRemote(S()), what).catch(e => console.warn('backup before', e.message)); }
 function runMigration(citrus, source) {
   const before = S(), r = MIG.applyMigration(before, citrus);
+  if (r.changed) backupBefore('migration');
   if (!r.changed) { toast('Nothing work-related found'); return; }
   try { store.replaceState(r.state, { bump: true }); smokeRender(); }
   catch (e) { console.warn(e); store.replaceState(before, { bump: true }); toast(`That copy would break the app (${String(e.message).slice(0, 60)}). Nothing was changed.`, 'err'); return; }
-  render(); toast(`Brought over: ${MIG.describe(r.counts)}`, 'ok', { action: { label: 'Undo', run: () => { store.replaceState(before, { bump: true }); render(); } } });
+  render(); toast(`Brought over: ${MIG.describe(r.counts)}`, 'ok', { action: { label: 'Undo', run: () => { store.replaceState(before, { bump: true, exact: S() }); render(); } } });
   if (!S().me) autoPickMe();
 }
 async function migrateNow() {
@@ -773,8 +795,12 @@ function renderToday() {
   add(proposalsCard(), 96, 'Proposals');
   add(RU.todayCard(), 80, 'Contract dates');
   add(CP.credsTodayCard(now), 78, 'Licences');
-  if (info.hasRota) add(onCallCard(info), working ? 40 : 22, 'On call');
+  // during last night's tail the people on call now are last night's (beta T1-05)
+  if (info.hasRota || tailLive) add(onCallCard(tailLive ? dayInfo(s, addDays(startOfDay(now), -1)) : info, { now: tailLive ? now : null }), working ? 40 : 22, 'On call');
   ranked.sort((x, y) => y.score - x.score);
+  // the wide cockpit spreads the cards: the team cards go to the third column instead of stacking under the hero (beta T1-27)
+  const COL3 = ['Shift board', 'Tomorrow’s team', 'On call'], col3 = wide ? ranked.filter(r => COL3.includes(r.label)) : [];
+  if (wide) for (const r of col3) ranked.splice(ranked.indexOf(r), 1);
   const TOP = cz.today.top + ranked.filter(r => cz.today.pinned.includes(r.label)).length, top = ranked.slice(0, TOP), rest = ranked.slice(TOP);
   main.push(...top.map(r => r.el));
   if (rest.length) main.push(h('details', { class: 'more-today', open: getUi()[UI_MORE] ? '' : null, onToggle: (e) => { try { localStorage.setItem(UI_KEY, JSON.stringify({ ...getUi(), [UI_MORE]: e.currentTarget.open })); } catch {} } }, h('summary', {}, h('span', { class: 'title' }, 'More for today'), h('span', { class: 'chips' }, rest.map(r => h('span', { class: 'chip' }, r.label)))), ...rest.map(r => r.el)));
@@ -782,7 +808,7 @@ function renderToday() {
   { const fv = favCard(now); if (fv) side.push(fv); }
   if (wide) return h('div', { class: 'cockpit' }, h('div', { class: 'ck-col' }, ...main),
     h('div', { class: 'ck-col' }, h('div', { class: 'ck-head' }, h('h2', {}, 'Calendar'), h('button', { class: 'btn sm ghost', onClick: () => show('calendar') }, 'Open')), ...[renderRota({ compact: true })].flat().filter(Boolean)),
-    h('div', { class: 'ck-col' }, ...side, ...[TV.renderTeam({ compact: true })].flat().filter(Boolean)));
+    h('div', { class: 'ck-col' }, ...col3.map(r => r.el), ...side, ...[TV.renderTeam({ compact: true })].flat().filter(Boolean)));
   return h('div', { class: 'cols' }, h('div', {}, ...main), h('div', {}, ...side));
 }
 /** Proposals from the Claude inbox (postings, swaps, nurse notes): Take or dismiss, never applied on their own. */
@@ -854,7 +880,7 @@ const nbTimes = (t) => String(t).split(/(\d\d:\d\d–\d\d:\d\d)/).map((x, i) => 
 /** What tomorrow holds, or that it isn't known yet: a missing month is not a day off (beta T01-08, T10-04). */
 function tomorrowText(now, tmr) {
   if (!S().me) return '';
-  if (!TM.hasGpRota(tmr.info) && !tmr.info.mine) { const d = addDays(now, 1); return h('span', { class: 'unk-txt' }, `no rota yet (${MONTHS[d.getMonth()]} not loaded)`); }
+  if (!TM.hasGpRota(tmr.info) && !tmr.info.mine) { const d = addDays(now, 1); return h('span', { class: 'unk-txt' }, tmr.info.hasRota ? `no GP rota for ${MONTHS[d.getMonth()]} yet` : `no rota yet (${MONTHS[d.getMonth()]} not loaded)`); }
   if (tmr.today) return shiftText(tmr.today.shift);
   if (tmr.noHours) return `${tmr.noHours.shift.label || tmr.noHours.code} (no hours given)`;
   if (tmr.info.mine?.shift.kind === 'leave') return tmr.info.mine.shift.label;
@@ -873,7 +899,7 @@ function heroCard(now, md = myDay(S(), now)) {
   const say = (...kids) => words.append(...kids.filter(Boolean));   // raw append() would print "null"
   const times = (e) => `${fmtTime(e.window.start)}–${fmtTime(e.window.end)} · ${fmtDur(e.shift.hours.durationMin)} · ${e.code}`;
   say(h('div', { class: 'title' }, `${DAY_NAMES[now.getDay()]} ${fmtDate(now)}`, f.kind === 'tomorrow' && f.doneToday ? h('span', { class: 'hero-done' }, ' · today’s shift done ✓') : null));
-  if (!s.me && info.hasRota) say(h('div', { class: 'big' }, 'Who are you?'), h('div', { class: 'sub' }, 'Pick your row once and Mandarin shows your shifts everywhere.'), h('div', { class: 'row', style: { marginTop: '10px' } }, h('button', { class: 'btn primary sm', onClick: () => mePicker({ first: true }) }, 'Pick your row')));
+  if (!s.me && info.hasRota && mePeople().length) say(h('div', { class: 'big' }, 'Who are you?'), h('div', { class: 'sub' }, 'Pick your row once and Mandarin shows your shifts everywhere.'), h('div', { class: 'row', style: { marginTop: '10px' } }, h('button', { class: 'btn primary sm', onClick: () => mePicker({ first: true }) }, 'Pick your row')));
   else if (missing) {
     // you're set as someone this month's GP rota doesn't have: say so, instead of a cheerful "Day off" (beta T10-03)
     const { twin } = missing;
@@ -938,10 +964,13 @@ function dayDial(date) {
   const marker = nowMin == null ? null : (() => { const [x1, y1] = pt(rOuter - w / 2 - 3, nowMin), [x2, y2] = pt(rOuter + w / 2 + 3, nowMin); return el('line', { x1, y1, x2, y2, stroke: 'var(--orange)', 'stroke-width': 3, 'stroke-linecap': 'round', class: 'now' }); })();
   // the centre names the shift you are on now: last night's until it ends, then today's (beta T10-02: 03:00 mid-night said "post-night")
   const nowD = new Date(), tailLive = overnightTail && sameDay(date, nowD) && nowD < overnightTail.window.end, cur = tailLive ? overnightTail : today;
-  const centre = cur ? [el('text', { x: C, y: C - 4, 'text-anchor': 'middle', 'font-size': 20, 'font-weight': 800, fill: 'var(--text)' }, cur.code), el('text', { x: C, y: C + 14, 'text-anchor': 'middle', 'font-size': 10, fill: 'var(--muted)' }, tailLive ? `until ${fmtTime(overnightTail.window.end)}` : `${fmtMin(today.shift.hours.start)}–${fmtMin(today.shift.hours.end)}`)]
+  const nh = !cur ? myDay(s, date).noHours : null, done = cur && !tailLive && nowD >= shiftWindow(date, today.shift).end;
+  const short = (c) => { const t = String(c || ''); return t.length <= 4 ? t : t.split(/\s+/).map(x => x[0]).join('').slice(0, 4).toUpperCase(); };
+  const centre = cur ? [el('text', { x: C, y: C - 4, 'text-anchor': 'middle', 'font-size': 20, 'font-weight': 800, fill: done ? 'var(--muted)' : 'var(--text)' }, short(cur.code)), el('text', { x: C, y: C + 14, 'text-anchor': 'middle', 'font-size': 10, fill: 'var(--muted)' }, tailLive ? `until ${fmtTime(overnightTail.window.end)}` : done ? 'done ✓' : `${fmtMin(today.shift.hours.start)}–${fmtMin(today.shift.hours.end)}`)]
+    : nh ? [el('text', { x: C, y: C - 2, 'text-anchor': 'middle', 'font-size': 18, 'font-weight': 800, fill: 'var(--text)' }, short(nh.code)), el('text', { x: C, y: C + 14, 'text-anchor': 'middle', 'font-size': 10, fill: 'var(--muted)' }, 'working · no hours')]
     : [el('text', { x: C, y: C + 5, 'text-anchor': 'middle', 'font-size': 14, 'font-weight': 700, fill: 'var(--muted)' }, overnightTail ? 'post-night' : 'free')];
   const w0 = cur ? (tailLive ? overnightTail.window : shiftWindow(date, today.shift)) : null;
-  const said = !cur ? (overnightTail ? 'off after a night' : 'no shift') : nowD < w0.start ? `${cur.code} ${fmtTime(w0.start)}–${fmtTime(w0.end)}, starts in ${fmtDur(Math.round((w0.start - nowD) / 60000))}` : nowD < w0.end ? `${cur.code} until ${fmtTime(w0.end)}, ${fmtDur(Math.round((w0.end - nowD) / 60000))} left` : `${cur.code} done`;
+  const said = !cur ? (nh ? `${nh.code}, working, no hours in the rota` : overnightTail ? 'off after a night' : 'no shift') : nowD < w0.start ? `${cur.code} ${fmtTime(w0.start)}–${fmtTime(w0.end)}, starts in ${fmtDur(Math.round((w0.start - nowD) / 60000))}` : nowD < w0.end ? `${cur.code} until ${fmtTime(w0.end)}, ${fmtDur(Math.round((w0.end - nowD) / 60000))} left` : `${cur.code} done`;
   const svg = el('svg', { viewBox: `0 0 ${2 * C} ${2 * C}`, class: 'dial', role: 'img', 'aria-label': `Your day as a 24-hour ring: ${said}${nowMin != null ? `; now ${fmtTime(nowD)}` : ''}` }, ...paths, ...ticks, ...labels, marker, ...centre);
   return svg;
 }
@@ -949,7 +978,9 @@ function dayDial(date) {
 // next 7 days at a glance
 const hh24 = (m) => pad2(Math.floor((((m % 1440) + 1440) % 1440) / 60));
 /** People from the day's rotas → short names that stay unique ("Ahmed A." / "Ahmed E."), used by the hero, the board and the brief (beta T01-05). */
-function namerFor(...infos) { const names = TM.shortNames(infos.flatMap(i => (i?.entries || []).map(e => e.person))); return (p) => names.get(personKeyOf(p)) || firstName(p.name); }
+/** A one-word rota name ("Wed") reads like a weekday or a stray word: it keeps its "Dr" (beta T1-26). */
+const keepDr = (p, n) => { const w = String(p.name || '').replace(/^Dr\.?\s*/i, '').trim().split(/\s+/).filter(Boolean); return w.length === 1 && /^dr\b/i.test(String(p.name)) ? `Dr ${w[0][0].toUpperCase()}${w[0].slice(1)}` : n; };
+function namerFor(...infos) { const names = TM.shortNames(infos.flatMap(i => (i?.entries || []).map(e => e.person))); return (p) => keepDr(p, names.get(personKeyOf(p)) || firstName(p.name)); }
 /**
  * Hero names: unique among everyone on that day (doctors AND nurses), your saved nickname for a friend linked to the row,
  * a surname initial when a first name is also a friend's ("Fatima K." next to your friend Fatima M.), and never a 1–2 letter stub
@@ -963,7 +994,7 @@ function teamNamer(s, info, date) {
     const k = personKeyOf(p), nick = DIR.contactOf(k).nick; if (nick) return nick;   // the nickname from your contact card
     let n = names.get(k) || firstName(p.name); const w = bare(p.name);
     if (n.length <= 2 && w.length > 1) n = `${w[0]} ${w[1]}`;
-    return n;
+    return keepDr(p, n);
   };
 }
 /**
@@ -979,7 +1010,7 @@ function heroTeam(f) {
   const shortSite = site.replace(/ office clinic/i, ' clinic');
   const docs = team.rows.slice(0, MAX).map(r => pill((T.isFav(s, personKeyOf(r.entry.person)) ? '⭐ ' : '') + nm(r.entry.person), r.same ? '' : span(r.entry), () => personSheet(r.entry.person), r.same ? 'same' : '', `${r.entry.person.name}, ${r.entry.shift.label} ${span(r.entry)}`));
   if (team.rows.length > MAX) docs.push(pill(`+${team.rows.length - MAX}`, '', () => daySheet(f.date), 'more', 'Everyone at your site'));
-  if (!team.rows.length) docs.push(h('span', { class: 'tm-alone' }, `Alone at ${shortSite || 'your site'}`));
+  if (!team.rows.length) docs.push(h('span', { class: 'tm-alone' }, site ? `Alone at ${shortSite}` : `${mine.shift.label}: no site team`));   // Admin day, HQ, SF: no clinical team (beta T1-11)
   if (team.otherSites) docs.push(pill(`${team.otherSites} at other sites`, '', () => daySheet(f.date), 'ghost', 'See every site in the day sheet'));
   // nurses: a 25% guess on three of fourteen nurses is noise; show who is confirmed (or heard), and the rest as one count (beta T01-16)
   let nurses = [];
@@ -999,7 +1030,9 @@ function heroTeam(f) {
   }
   // the specialist who covers your site; on a site with no specialist rota loaded, say so instead of showing nothing (beta T01-17)
   const kind = /upper/i.test(site) ? 'uv' : /lower/i.test(site) ? 'lv' : '', loadedKind = kind && info.rotas.some(r => r.unitKind === kind);
-  const overl = (list) => { const m = overlapModel(mine, list); return (m?.rows || []).map(r => r.entry); };
+  // who is in at this minute leads (an FSED day doctor who left at 21:00 is not the one on call at 00:30, beta T1-06)
+  const nowD = new Date(), isOn = (e) => { const w = shiftWindow(f.date, e.shift); return w && w.start <= nowD && nowD < w.end ? 1 : 0; };
+  const overl = (list) => { const m = overlapModel(mine, list); return (m?.rows || []).map(r => r.entry).sort((a, b) => isOn(b) - isOn(a)); };
   let spec = kind ? overl(info[kind]) : [], specLab = 'Specialist';
   if (!spec.length) { const fs = overl(info.fsed); if (fs.length) { spec = fs; specLab = 'FSED on call'; } }
   const specPills = spec.slice(0, 2).map(e => pill(nm(e.person), span(e), () => personSheet(e.person), '', `${e.person.name}, ${e.shift.label} ${span(e)}`));
@@ -1046,7 +1079,7 @@ function mciBadge() {
 /** Shift as a progress bar: how far through, time left, when it ends. */
 function shiftProgress(w) {
   const now = Date.now(), total = Math.max(1, w.end - w.start), pct = Math.max(0, Math.min(1, (now - w.start) / total)), left = Math.round((w.end - now) / 60000);
-  const label = now < w.start ? `Starts in ${fmtDur(Math.round((w.start - now) / 60000))}` : now < w.end ? `${fmtDur(left)} left · ends ${fmtTime(w.end)}` : 'Shift done ✓';
+  const toStart = Math.round((w.start - now) / 60000), label = now < w.start ? (toStart < 1 ? 'Starting now' : `Starts in ${fmtDur(toStart)}`) : now < w.end ? (left < 1 ? `Ending now · ${fmtTime(w.end)}` : `${fmtDur(left)} left · ends ${fmtTime(w.end)}`) : 'Shift done ✓';
   return h('div', { class: 'sp-wrap' }, h('div', { class: 'sp-bar', role: 'progressbar', 'aria-valuemin': 0, 'aria-valuemax': 100, 'aria-valuenow': Math.round(pct * 100), 'aria-label': 'Shift progress' }, h('i', { style: { width: `${Math.round(pct * 100)}%` } })), h('div', { class: `small ${now < w.end ? 'orange' : 'muted'}` }, label));
 }
 /** The next calendar event or accepted plan block today. */
@@ -1066,8 +1099,10 @@ function shiftBoard(info, md = null) {
   const s = S(), now = new Date(), isToday = sameDay(info.date, now), nowMin = isToday ? minsOf(now) : null;
   const prev = isToday ? dayInfo(s, addDays(info.date, -1)) : null, bySite = { ...info.bySite };
   if (prev) for (const [site, list] of Object.entries(prev.bySite)) { const all = TM.withLastNight(bySite[site] || [], list, nowMin); if (all.length) bySite[site] = all; }
-  const sites = Object.keys(bySite).sort((a, b) => bySite[b].length - bySite[a].length); if (!sites.length) return null;
-  const tail = md?.overnightTail && now < md.overnightTail.window.end ? md.overnightTail : null, mine = (tail || md?.today || info.mine)?.shift.site;
+  const tail = md?.overnightTail && now < md.overnightTail.window.end ? md.overnightTail : null, cur = (tail || md?.today || info.mine)?.shift, mine = cur ? (cur.site || cur.label) : '';
+  // shifts without a site (Admin day, SF, a project) share one "Other" chip instead of one chip each (beta T1-25)
+  for (const k of Object.keys(bySite)) { const e0 = bySite[k][0]; if (!e0?.shift.site && k !== mine) { (bySite.Other ||= []).push(...bySite[k]); delete bySite[k]; } }
+  const sites = Object.keys(bySite).sort((a, b) => (b === 'Other' ? -1 : a === 'Other' ? 1 : 0) || bySite[b].length - bySite[a].length); if (!sites.length) return null;
   const site = sites.includes(boardPick) ? boardPick : sites.includes(mine) ? mine : sites[0], meKey = s.me ? personKeyOf({ id: s.me.id, name: String(s.me.name || '') }) : '', nm = namerFor(info, prev);
   const m = boardModel(bySite[site], { nowMin, meKey, keyOf: personKeyOf, wrap: false }); if (!m.rows.length) return null;
   const span = m.axisEnd - m.axisStart, pct = (t) => `${((t - m.axisStart) / span * 100).toFixed(2)}%`, MAXROWS = 14, rows = m.rows.slice(0, MAXROWS);
@@ -1075,7 +1110,7 @@ function shiftBoard(info, md = null) {
   for (let t = Math.ceil(m.axisStart / 180) * 180; t <= m.axisEnd; t += 180) grid.push(h('span', { class: `bd-tick ${((t % 1440) + 1440) % 1440 === 0 ? 'mid' : ''}`, style: { left: pct(t) } }, h('small', {}, hh24(t))));
   const heat = h('div', { class: 'bd-heat', 'aria-hidden': 'true' }, m.hours.map(x => h('i', { title: `${hh24(x.t)}:00 · ${x.n} in`, style: { opacity: m.peak ? (0.12 + 0.88 * x.n / m.peak).toFixed(2) : 0.12 } })));
   const hmm = (t) => `${hh24(t)}:${pad2(((t % 60) + 60) % 60)}`;
-  const summary = m.now == null ? `${m.rows.length} doctors across the day` : `${m.nowCount} in now${m.next ? ` · ${hmm(m.next.t)}: ${[m.next.arrive ? `${m.next.arrive} arrive${m.next.arrive === 1 ? 's' : ''}` : '', m.next.leave ? `${m.next.leave} leave${m.next.leave === 1 ? 's' : ''}` : ''].filter(Boolean).join(', ')}` : ''}`;
+  const summary = m.now == null ? `${m.rows.length} doctor${m.rows.length === 1 ? '' : 's'} across the day` : `${m.nowCount} in now${m.next ? ` · ${hmm(m.next.t)}: ${[m.next.arrive ? `${m.next.arrive} arrive${m.next.arrive === 1 ? 's' : ''}` : '', m.next.leave ? `${m.next.leave} leave${m.next.leave === 1 ? 's' : ''}` : ''].filter(Boolean).join(', ')}` : ''}`;
   return h('div', { class: 'card board' }, h('div', { class: 'row' }, h('div', { class: 'title grow' }, 'Who’s in'), h('span', { class: 'dim tiny' }, summary)),
     sites.length > 1 ? h('div', { class: 'bd-sites' }, sites.map(x => h('button', { class: `c-chip ${x === site ? 'on' : ''}`, 'aria-pressed': x === site ? 'true' : 'false', style: { '--c': 'var(--orange)' }, onClick: () => { boardPick = x; render(); } }, x.length > 18 ? x.slice(0, 17) + '…' : x, h('small', {}, bySite[x].length)))) : null,
     h('div', { class: 'bd-plot' },
@@ -1101,8 +1136,11 @@ function onboardingCard() {
     dz);
 }
 
-function onCallCard(info) {
+function onCallCard(info, { now = null } = {}) {
   const groups = [];
+  // with `now` (a night's tail), only who is on at this minute: the day crew of the shift's date has gone home
+  const on = (e) => { if (!now) return true; const w = shiftWindow(info.date, e.shift); return !!w && w.start <= now && now < w.end; };
+  info = now ? { ...info, fsed: info.fsed.filter(on), uv: info.uv.filter(on), lv: info.lv.filter(on) } : info;
   const fsedD = info.fsed.filter(e => e.shift.type === 'D'), fsedN = info.fsed.filter(e => e.shift.type === 'N');
   if (info.fsed.length) groups.push(h('div', { class: 'site-group' }, h('h3', {}, 'FSED on call'),
     h('div', { class: 'people' }, ...fsedD.map(e => personPill(e)), ...fsedN.map(e => personPill(e)))));
@@ -1110,7 +1148,7 @@ function onCallCard(info) {
   if (info.lv.length) groups.push(h('div', { class: 'site-group' }, h('h3', {}, 'Lower Village specialist'), h('div', { class: 'people' }, ...info.lv.map(e => personPill(e)))));
   if (!groups.length) groups.push(h('div', { class: 'muted small' }, 'No specialist rota loaded for this month'));
   if (info.mci.length) groups.push(h('div', { class: 'mci-line' }, h('span', { class: 'dim tiny', title: 'Moved to the incident site if a mass-casualty incident happens near FSED' }, 'MCI 2nd: '), info.mci.map(e => h('button', { class: 'mci-name', onClick: () => personSheet(e.person) }, firstName(e.person.name)))));
-  return h('div', { class: 'card' }, h('div', { class: 'title' }, 'On call'), ...groups);
+  return h('div', { class: 'card' }, h('div', { class: 'title' }, now ? 'On call now' : 'On call'), ...groups);
 }
 
 function eventsCard(date) {
@@ -1276,7 +1314,7 @@ const rawCode = (info) => info.mine ? String(info.mine.person.days[info.date.get
 function daySheet(date) {
   const s = S();
   const info = dayInfo(s, date);
-  const { today, overnightTail } = myDay(s, date);
+  const { today, overnightTail, noHours } = myDay(s, date);
   const k = keyOf(date), known = meInRotas(info.rotas, s), past = k < keyOf(new Date()), swap = info.mine?.swap || pencilled(s, k);
   const raw = rawCode(info), rawSh = info.mine ? interpretFor(info.mine.rota, raw) : null;
   const tailLine = (t) => h('div', { class: 'sub ds-tail' }, `Until ${fmtTime(t.window.end)} you’re still on last night’s ${t.code} (${t.shift.label})`);
@@ -1293,7 +1331,8 @@ function daySheet(date) {
   }
   else if (!info.hasRota) content.push(h('div', { class: 'card hero' }, h('div', { class: 'big' }, overnightTail ? 'After your night' : 'Not known yet'), h('div', { class: 'sub' }, overnightTail ? `Your ${overnightTail.code} ends ${fmtTime(overnightTail.window.end)}. ` : '', `No rota for ${MONTHS[date.getMonth()]} ${date.getFullYear()} is loaded.`), h('div', { class: 'row', style: { marginTop: '10px' } }, importButton('Import'))));
   else if (s.me && !known) content.push(h('div', { class: 'card hero' }, h('div', { class: 'big' }, 'You’re not in these rotas'), h('div', { class: 'sub' }, `Loaded for ${MONTHS[date.getMonth()]}: ${info.rotas.map(r => UNIT_LABEL[r.unitKind] || r.unit).join(', ')}. Import the GP rota or pick your row; until then this day is unknown, not off.`), h('div', { class: 'row', style: { marginTop: '10px' } }, h('button', { class: 'btn sm', onClick: () => { topSheet()?.remove(); mePicker(); } }, 'Pick your row'))));
-  else if (s.me) content.push(h('div', { class: 'card hero' }, h('div', { class: 'big' }, overnightTail ? 'Off after night' : 'Day off'), overnightTail ? h('div', { class: 'sub' }, `Your ${overnightTail.code} ends ${fmtTime(overnightTail.window.end)}; the rest of the day is yours`) : null));
+  else if (noHours) content.push(h('div', { class: 'card hero' }, h('div', { class: 'title' }, 'Your day'), h('div', { class: 'big' }, noHours.shift.label || noHours.code), h('div', { class: 'sub' }, `Working (${noHours.code}); the rota gives no hours for it.`)));
+  else if (s.me) content.push(h('div', { class: 'card hero' }, h('div', { class: 'big' }, overnightTail ? (overnightTail.window.end > new Date() ? `On ${overnightTail.code} until ${fmtTime(overnightTail.window.end)}` : 'Off after night') : 'Day off'), overnightTail ? h('div', { class: 'sub' }, `Your ${overnightTail.code} ends ${fmtTime(overnightTail.window.end)}; the rest of the day is yours`) : null));
   // all sites
   const siteOrder = Object.keys(info.bySite).sort();
   if (siteOrder.length) content.push(h('div', { class: 'card' }, h('div', { class: 'title' }, 'GP coverage'),
@@ -1313,7 +1352,8 @@ function daySheet(date) {
   // the after-shift log for this day: rating, counts, note
   if (today && today.window.end <= new Date()) { const lg = s.shiftLog?.[k]; content.push(h('div', { class: 'card slog-day' }, h('div', { class: 'row' }, h('div', { class: 'title grow' }, 'Shift log'), h('button', { class: 'btn sm ghost', onClick: () => { topSheet()?.remove(); DU.logSheet(k); } }, lg ? '✎ Edit' : '＋ Counts and a note')),
     lg?.rating ? h('div', { class: 'small' }, [SL.FACES[lg.rating - 1], ...SL.COUNTS.filter(([c]) => Number.isFinite(lg[c])).map(([c, l]) => `${lg[c]} ${l.toLowerCase()}`)].filter(Boolean).join(' · '), lg.note ? h('div', { class: 'tiny dim' }, lg.note) : null) : DU.faces(k))); }
-  if (info.mine?.swap) content.splice(1, 0, h('div', { class: 'row small', style: { margin: '6px 0 10px' } }, h('span', { class: 'chip swap' }, 'corrected'), h('span', { class: 'muted' }, [`rota: ${raw || 'off'}`, info.mine.swap.with ? `swapped with ${info.mine.swap.with}` : '', info.mine.swap.note].filter(Boolean).join(' · '))));
+  if (info.mine?.swap) { const sw = info.mine.swap, kd = SW.kindOf(sw), who = sw.with ? { swap: `swapped with ${sw.with}`, gave: `you covered ${sw.with}`, got: `${sw.with} covered you` }[kd] || `with ${sw.with}` : '';
+    content.splice(1, 0, h('div', { class: 'row small sw-line', style: { margin: '6px 0 10px' } }, h('span', { class: `chip sw-k ${kd}` }, SW.KIND_LABEL[kd]), h('span', { class: 'muted' }, [`rota: ${raw || 'off'}`, who, sw.note].filter(Boolean).join(' · ')))); }
   // cover is for days ahead (beta T02-02); a correction needs your row in the rota
   content.push(h('div', { class: 'row wrap' }, h('a', { class: 'btn grow', href: `${CITRUS_URL}?from=mandarin#plan`, target: '_blank', rel: 'noopener' }, 'Plan in Citrus ▸'),
     known && !past && info.hasRota ? h('button', { class: 'btn grow', onClick: () => { topSheet()?.remove(); swapHelper(date); } }, 'Who could cover?') : null,
@@ -1488,26 +1528,64 @@ function swapSheet(date) {
   const s = S(); const k = keyOf(date);
   const info = dayInfo(s, date);
   const gp = info.rotas.find(r => r.unitKind === 'gp') || info.mine?.rota || null;
-  const cur = s.swaps?.[k], raw = rawCode(info), now = cur ? (cur.code || '') : raw;
+  const cur = s.swaps?.[k], raw = rawCode(info), now = cur ? (cur.kind === 'cancel' ? raw : cur.code || '') : raw;
   // codes from the parsed legend, grouped, with site and hours; leave is there, and the day's current code is always selectable (beta T02-06, T02-23)
   const groups = codeOptions(gp, [raw, cur?.code].filter(Boolean)), same = (c) => String(c).toUpperCase() === String(now).toUpperCase();
   const code = h('select', { 'aria-label': 'Your shift that day' }, h('option', { value: '', selected: !now }, 'Off (no shift)'), ...groups.map(g => h('optgroup', { label: g.group }, ...g.items.map(it => h('option', { value: it.code, selected: same(it.code) }, it.text)))));
   const people = allPeople(s).filter(p => p.units.includes('gp') && !isMe(s, p));
-  const withSel = h('select', { 'aria-label': 'Swapped with' }, h('option', { value: '' }, '— nobody / not a swap —'), ...people.map(p => h('option', { value: p.name, selected: cur?.with === p.name }, p.name)));
-  const note = h('input', { placeholder: 'Note (optional)', value: cur?.note || '' });
+  const withSel = h('select', { 'aria-label': 'With' }, h('option', { value: '' }, '— nobody —'), ...people.map(p => h('option', { value: p.name, selected: cur?.with === p.name }, p.name)));
+  const note = h('input', { placeholder: 'Note (optional)', maxlength: 200, value: cur?.note || '', 'aria-label': 'Note' });
+  const kindOfCode = (c) => interpretCode(c || '', gp?.legend || {}, 'gp').kind;
+  const leaveCode = groups.flatMap(g => g.items).find(it => kindOfCode(it.code) === 'leave')?.code || 'VL';
+  const theirCode = () => { const p = gp?.people.find(x => x.name === withSel.value); return p ? String(p.days[date.getDate()] || '') : ''; };
   let kind = cur ? SW.kindOf(cur) : '';
+  // the kind decides the shift where it can (beta T2-03/04/05): Cancelled and Covered for me → off, Leave → a leave code,
+  // Swap → the colleague's rota code for that day, I covered → their code (the shift you worked for them)
+  const follow = () => {
+    if (kind === 'cancel' || kind === 'got') code.value = '';
+    else if (kind === 'leave' && kindOfCode(code.value) !== 'leave') code.value = leaveCode;
+    else if ((kind === 'swap' || kind === 'gave') && withSel.value) { const t = theirCode(); if (t && [...code.options].some(o => o.value === t)) code.value = t; }
+    withLab.textContent = { swap: 'Swapped with', gave: 'You covered', got: 'Covered by' }[kind] || 'With (optional)';
+    withField.hidden = !['swap', 'gave', 'got', 'fix', ''].includes(kind);
+  };
   const kinds = h('div', { class: 'chips sw-kinds', role: 'radiogroup', 'aria-label': 'What happened' });
-  const paintKinds = () => kinds.replaceChildren(...SW.KINDS.map(([k, l, tip]) => h('button', { type: 'button', role: 'radio', 'aria-checked': kind === k ? 'true' : 'false', class: `chip ${kind === k ? 'sel' : ''}`, title: tip || l, onClick: () => { kind = k; paintKinds(); } }, l)));
-  paintKinds();
-  const says = h('p', { class: 'small muted' }, h('b', {}, 'Rota: '), raw ? codeText(gp, raw) : 'off', cur ? [' · ', h('b', {}, 'your correction: '), cur.code ? codeText(gp, cur.code) : 'off'] : null, '. Record what actually happens: a swap, a cover, a cancelled shift, leave. Imports never overwrite this, and covers keep a who-owes-whom count.');
+  const paintKinds = () => kinds.replaceChildren(...SW.KINDS.map(([kk, l, tip]) => h('button', { type: 'button', role: 'radio', 'aria-checked': kind === kk ? 'true' : 'false', class: `chip ${kind === kk ? 'sel' : ''}`, title: tip || l, onClick: () => { kind = kk; paintKinds(); follow(); } }, l)));
+  const withLab = h('label', {}, 'With'), withField = h('div', { class: 'field' }, withLab, withSel);
+  withSel.addEventListener('change', follow);
+  const err = h('div', { class: 'tiny field-err', 'aria-live': 'polite' });
+  const says = h('p', { class: 'small muted' }, h('b', {}, 'Rota: '), raw ? codeText(gp, raw) : 'off', cur ? [' · ', h('b', {}, 'your correction: '), cur.kind === 'cancel' ? 'cancelled' : cur.code ? codeText(gp, cur.code) : 'off'] : null, '. Record what actually happens. Imports never overwrite this, and covers keep a who-owes-whom count.');
+  /** What is wrong with the record, in one sentence, or '' (kind and shift must agree; a swap must change something). */
+  const problem = (rec) => {
+    const kc = kindOfCode(rec.code);
+    if (['swap', 'gave', 'got'].includes(rec.kind) && !rec.with) return 'Pick who it was with.';
+    if (rec.kind === 'leave' && kc !== 'leave') return 'Leave needs a leave code (AL, SL, VL…).';
+    if (rec.kind === 'gave' && kc !== 'work') return 'I covered: pick the shift you worked.';
+    if (rec.kind === 'swap' && String(rec.code).toUpperCase() === raw.toUpperCase()) return 'A swap should change your shift: pick the one you work instead.';
+    if (!rec.kind && String(rec.code).toUpperCase() === raw.toUpperCase() && !rec.with) return 'Nothing changes: pick what happened or a different shift.';
+    return '';
+  };
   const { close } = sheet([h('h2', {}, `Correct ${fmtDateShort(date)}`), says,
     h('div', { class: 'field' }, h('label', {}, 'What happened'), kinds),
     h('div', { class: 'field' }, h('label', {}, 'Your shift that day'), code),
-    h('div', { class: 'field' }, h('label', {}, 'Swapped with'), withSel),
-    h('div', { class: 'field' }, h('label', {}, 'Note'), note),
+    withField,
+    h('div', { class: 'field' }, h('label', {}, 'Note'), note), err,
     h('div', { class: 'row' },
-      h('button', { class: 'btn primary grow', onClick: () => { const rec = { code: code.value, with: withSel.value, note: note.value.trim(), at: Date.now() }; rec.kind = kind || SW.kindOf(rec); if ((rec.kind === 'gave' || rec.kind === 'got' || rec.kind === 'swap') && !rec.with) return toast('Pick who it was with', 'err'); store.update(x => { const deleted = { ...(x.deleted || {}) }; delete deleted[`swap:${k}`]; return { ...x, swaps: { ...(x.swaps || {}), [k]: rec }, deleted }; }); close(); toast('Saved', 'ok', cur ? { action: { label: 'Undo', run: () => store.update(x => ({ ...x, swaps: { ...x.swaps, [k]: cur } })) } } : {}); render(); } }, 'Save'),
-      cur ? h('button', { class: 'btn danger', onClick: () => { store.update(x => { const swaps = { ...(x.swaps || {}) }; delete swaps[k]; return { ...x, swaps, deleted: store.tombstone(x, `swap:${k}`) }; }); close(); toast('Correction removed', 'ok', { action: { label: 'Undo', run: () => store.update(x => { const deleted = { ...(x.deleted || {}) }; delete deleted[`swap:${k}`]; return { ...x, swaps: { ...x.swaps, [k]: cur }, deleted }; }) } }); render(); } }, 'Remove') : null)]);
+      h('button', { class: 'btn primary grow', onClick: () => {
+        const rec = { code: kind === 'cancel' ? '' : code.value, with: withSel.value, note: note.value.trim().slice(0, 200), at: Date.now() }; rec.kind = kind || SW.kindOf(rec);
+        const why = problem(rec); if (why) { err.textContent = why; return; }
+        const rest = restWarning(date, rec); if (rest && !err.dataset.ok) { err.textContent = `${rest} Save again to keep it.`; err.dataset.ok = '1'; return; }
+        store.update(x => { const deleted = { ...(x.deleted || {}) }; delete deleted[`swap:${k}`]; return { ...x, swaps: { ...(x.swaps || {}), [k]: rec }, deleted }; });
+        close(); toast('Saved', 'ok', { action: { label: 'Undo', run: () => store.update(x => store.revert(x, 'swaps', 'swap', k, cur)) } }); render();
+      } }, 'Save'),
+      cur ? h('button', { class: 'btn danger', onClick: () => { store.update(x => store.revert(x, 'swaps', 'swap', k, undefined)); close(); toast('Correction removed', 'ok', { action: { label: 'Undo', run: () => store.update(x => store.revert(x, 'swaps', 'swap', k, cur)) } }); render(); } }, 'Remove') : null)]);
+  paintKinds(); follow();
+}
+/** Under 11 hours between this day's shift and the one before or after it (labour-law rest, beta T2-06): a sentence, or ''. */
+function restWarning(date, rec) {
+  const s = S(), trial = { ...s, swaps: { ...(s.swaps || {}), [keyOf(date)]: rec } };
+  const w = L.windows(trial, addDays(date, -2), addDays(date, 3)).sort((a, b) => a.start - b.start), mine = w.findIndex(x => sameDay(x.date, date)); if (mine < 0) return '';
+  for (const j of [mine - 1, mine + 1]) { const o = w[j]; if (!o) continue; const gap = (j < mine ? w[mine].start - o.end : o.start - w[mine].end) / 3600000; if (gap < 11) return `Only ${Math.max(0, Math.round(gap * 10) / 10)}h between this shift and the ${j < mine ? 'one before' : 'next'} (the law asks for rest between shifts).`; }
+  return '';
 }
 
 function diagnosticsCard() {
@@ -1566,7 +1644,7 @@ function renderMore() {
     signed ? h('div', { class: 'small muted', style: { marginTop: '8px' } }, `${s.google.email || 'signed in'}${s.google.lastSync ? ` · last sync ${new Date(s.google.lastSync).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}` : ''}`) : null,
     h('details', { class: 'adv' }, h('summary', { class: 'small' }, 'Advanced'), h('div', { class: 'field' }, h('label', {}, 'OAuth client ID (the one Google Cloud client all your apps share)'), cid, h('div', { class: 'tiny dim' }, 'Only the client ID, never the secret. This site must be in the client’s "Authorised JavaScript origins".')),
       h('button', { class: 'btn sm', onClick: async () => { store.update(x => ({ ...x, settings: { ...x.settings, clientId: cid.value.trim() } }), { remote: false }); try { await G.init(cid.value.trim()); toast('Saved', 'ok'); } catch (e) { toast(e.message, 'err'); } } }, 'Save ID'),
-      h('div', { class: 'field', style: { marginTop: '10px' } }, h('label', {}, 'Drive folder'), h('input', { value: s.settings.driveFolder, 'aria-label': 'Drive folder', onChange: (e) => store.update(x => ({ ...x, settings: { ...x.settings, driveFolder: e.target.value.trim() || 'My Apps' } })) }), h('div', { class: 'tiny dim' }, 'Rotas go in <folder>/Rotas; Mandarin keeps its files in <folder>/hub/mandarin/.')))));
+      h('div', { class: 'field', style: { marginTop: '10px' } }, h('label', {}, 'Drive folder'), h('input', { value: s.settings.driveFolder, 'aria-label': 'Drive folder', onChange: (e) => { const v = e.target.value.trim() || 'My Apps'; if (/[\/\\]/.test(v) || v.length > 60) { e.target.value = s.settings.driveFolder; return toast('One folder name only (no “/”)', 'err'); } if (v !== 'My Apps' && !confirm(`Your apps share one folder, “My Apps”. Use “${v}” for Mandarin anyway? Citrus will not see Mandarin's files there.`)) { e.target.value = s.settings.driveFolder; return; } store.update(x => ({ ...x, settings: { ...x.settings, driveFolder: v } })); } }), h('div', { class: 'tiny dim' }, 'Keep “My Apps”: every app reads the hub there. Rotas go in My Apps/Rotas; Mandarin keeps its files in My Apps/hub/mandarin/.')))));
   if (signed) {
     const cals = rt.calendars;
     out.push(h('div', { class: 'card' }, h('div', { class: 'title' }, 'Calendars to show'),
@@ -1587,7 +1665,7 @@ function renderMore() {
   out.push(h('div', { class: 'card' }, h('div', { class: 'title' }, 'Backup and data'),
     h('div', { class: 'row wrap' },
       h('button', { class: 'btn', onClick: downloadBackup }, '⬇ Backup'),
-      (() => { const inp = h('input', { type: 'file', accept: '.json,application/json', style: { display: 'none' }, onChange: async (e) => { const f = e.target.files[0]; e.target.value = ''; if (!f) return; let j; try { j = JSON.parse(await f.text()); } catch { return toast(`${f.name} is not a backup file (it isn’t JSON)`, 'err'); } if (j?.app !== 'mandarin' && (j?.tasks || j?.goals || j?.plan)) { migrationOffered = false; offerMigration(j, f.name); return; } restoreSheet(j, { source: f.name }); } }); return h('span', {}, inp, h('button', { class: 'btn', title: 'A Mandarin backup, or a Citrus backup to bring your work over', onClick: () => inp.click() }, '⬆ Restore or import')); })(),
+      (() => { const inp = h('input', { type: 'file', accept: '.json,application/json', style: { display: 'none' }, onChange: async (e) => { const f = e.target.files[0]; e.target.value = ''; if (!f) return; let j; try { j = JSON.parse(await f.text()); } catch { return toast(`${f.name} is not a backup file (it isn’t JSON)`, 'err'); } if (j?.app !== 'mandarin' && MIG.looksLikeCitrus(j)) { migrationOffered = false; offerMigration(j, f.name); return; } restoreSheet(j, { source: f.name }); } }); return h('span', {}, inp, h('button', { class: 'btn', title: 'A Mandarin backup, or a Citrus backup to bring your work over', onClick: () => inp.click() }, '⬆ Restore or import')); })(),
       preRestore() ? h('button', { class: 'btn', title: `Your data as it was before the restore on ${new Date(preRestore().at).toLocaleString('en-GB')}`, onClick: undoRestore }, '↶ Undo restore') : null,
       signed ? h('button', { class: 'btn', onClick: migrateNow }, '🍊 Bring work over from Citrus') : null,
       h('button', { class: 'btn danger', onClick: eraseSheet }, 'Erase this device…')),

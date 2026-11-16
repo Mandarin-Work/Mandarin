@@ -50,6 +50,8 @@ export function safeUrl(u) { if (u == null || String(u).trim() === '') return ''
 export function toast(msg, kind = '', { action = null, ms = action ? 6000 : 3200 } = {}) {
   let host = document.getElementById('toasts');
   if (!host) { host = h('div', { id: 'toasts', role: 'status', 'aria-live': 'polite' }); document.body.append(host); }
+  // one Undo at a time: a newer action replaces an older one, whose snapshot may no longer be true (beta T3-01, T3-02)
+  if (action) for (const old of host.querySelectorAll('.toast.act')) old.remove();
   const t = h('div', { class: `toast ${kind} ${action ? 'act' : ''}` }, h('span', { class: 't-msg' }, msg));
   const drop = () => { t.classList.remove('show'); setTimeout(() => t.remove(), 300); };
   if (action) t.append(h('button', { class: 't-btn', type: 'button', onClick: () => { drop(); action.run(); } }, action.label));

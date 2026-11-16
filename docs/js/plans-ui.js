@@ -26,7 +26,8 @@ export function monthCard(y, mo) {
   const top = Object.entries(r.sites).sort((a, b) => b[1] - a[1]).slice(0, 3);
   const rate = r.otRate != null ? `Paid at ${r.otRate.toFixed(2)} SAR an hour (hourly + 50 % of basic) ≈ ${sar(r.otPay)}` : 'Paid at hourly wage + 50 % of basic (add your basic in Career to see the amount)';
   return h('div', { class: 'card mr' }, h('div', { class: 'row' }, h('div', { class: 'title grow' }, `${MONTHS[mo - 1]} in numbers`), h('button', { class: 'btn sm ghost', onClick: () => shareImage(y, mo) }, '🖼 Share image')),
-    h('div', { class: 'lw-stats' }, [stat(r.work, 'shifts'), stat(`${r.hours}h`, 'worked'), stat(r.nights, 'nights'), stat(r.weekend, 'Fri/Sat worked'), stat(r.longestStreak, 'longest run'), stat(`${r.avgShiftH}h`, 'average shift')]),
+    h('div', { class: 'lw-stats' }, [stat(r.work - r.noHours, 'shifts'), stat(`${r.hours}h`, 'worked'), stat(r.nights, r.nights === 1 ? 'night' : 'nights'), stat(r.weekend, 'Fri/Sat worked'), stat(r.longestStreak, 'longest run'), r.avgShiftH ? stat(`${r.avgShiftH}h`, 'average shift') : null, r.noHours ? stat(r.noHours, 'days on a posting') : null].filter(Boolean)),
+    r.noHours ? h('div', { class: 'tiny dim', style: { marginTop: '4px' } }, `${Object.entries(r.away).map(([c, n]) => `${c} × ${n}`).join(' · ')}: the rota gives no hours for these days, so they are not in the hours or the overtime.`) : null,
     // "Check my rota against the law" off: no overtime verdict or flags here either (beta T02-13)
     r.lawOn ? h('div', { class: 'cr-key' }, h('div', { class: 'grow' }, h('b', {}, r.overtimeH ? `${r.overtimeH}h overtime` : 'No overtime this month'),
       h('div', { class: 'tiny dim' }, r.overtimeH ? `${r.holidayH ? `${r.holidayH}h on public holidays + weekly hours over the limit. ` : ''}${rate}, or ${r.compLeaveH}h of leave in lieu if you agree` : 'Under the weekly limit in every full week, and no public holiday worked')),
@@ -70,7 +71,7 @@ export async function shareImage(y, mo) {
       // the full code (D1 / D2 / N3 …) so colleagues can read the site, not just "D"
       g.font = F(800, 40, disp); g.fillText(sh.code || sh.type, x + cw / 2, yy + 78);
       const st = sh.site; if (st) { const k = (sh.code || '').replace(/^[A-Z]+/i, '') || sh.code; if (k && !sites.has(k)) sites.set(k, st); }
-      if (sh.hours) { g.font = F(600, 20); const hh = (m) => String(Math.floor(m / 60) % 24).padStart(2, '0'); g.fillText(`${hh(sh.hours.start)}–${hh(sh.hours.end)}`, x + cw / 2, yy + 104); }
+      if (sh.hours) { g.font = F(600, 20); const hh = (m) => `${String(Math.floor(m / 60) % 24).padStart(2, '0')}${m % 60 ? ':' + String(m % 60).padStart(2, '0') : ''}`; g.fillText(`${hh(sh.hours.start)}–${hh(sh.hours.end)}`, x + cw / 2, yy + 104); }
       if (mi.mci) { anyMci = true; g.fillStyle = c.red.css; g.beginPath(); g.arc(x + cw - 22, yy + 24, 9, 0, Math.PI * 2); g.fill(); g.strokeStyle = fg; g.lineWidth = 2; g.stroke(); }
     } else if (sh?.kind === 'leave') { g.font = F(800, 34, disp); g.fillText('Leave', x + cw / 2, yy + 80); }
   }
@@ -116,8 +117,11 @@ export function leaveSheet() {
         verdicts(e).map(([k, t]) => h('div', { class: `lw-flag ${k}` }, t)),
         e.shortNotice ? null : h('div', { class: 'tiny dim' }, `Ask for it in writing by ${fd(e.noticeBy)}: the employer sets leave dates, with 30 days’ notice, and may refuse for work needs.`)) : null,
       h('div', { class: 'row wrap', style: { marginTop: '10px' } }, h('button', { class: 'btn primary grow', disabled: fresh ? null : '', onClick: () => {
-        const r = P.applyLeave(ctx.S(), fromKey(v.from), fromKey(v.to)); if (!r.days) return toast('Those days are already leave');
-        ctx.update(() => r.state); toast(`${plural(r.days, 'day')} marked as leave in your rota${r.already ? ` · ${r.already} already planned` : ''}`); box.close(); ctx.render(); } }, fresh ? `Mark ${plural(fresh, 'day')} as leave in my rota` : 'Already leave')),
+        // a start in the past is a record, not a plan: Correct this day is the place for it (beta T2-12)
+        if (v.from < today) return toast('That starts in the past: record it with “Correct this day” in the calendar', 'err');
+        const r = P.applyLeave(ctx.S(), fromKey(v.from), fromKey(v.to)); if (!r.days) return toast(r.kept.length ? 'Those days already have your corrections' : 'Those days are already leave');
+        const keptTxt = r.kept.length ? ` · kept your corrections on ${r.kept.map(k => fd(k)).join(', ')}` : '';
+        ctx.update(() => r.state); toast(`${plural(r.days, 'day')} marked as leave in your rota${r.already ? ` · ${r.already} already planned` : ''}${keptTxt}`, r.kept.length ? 'err' : 'ok', { ms: r.kept.length ? 8000 : 3200 }); box.close(); ctx.render(); } }, fresh ? `Mark ${plural(fresh, 'day')} as leave in my rota` : 'Already leave')),
       planned.length ? h('div', { class: 'card lp-planned' }, h('div', { class: 'title' }, 'Planned leave in your rota'), planned.map(r => h('div', { class: 'row' }, h('div', { class: 'grow small' }, `${fd(r.from)} → ${fd(r.to)} · ${plural(r.days, 'day')}`), h('button', { class: 'btn sm ghost', 'aria-label': `Remove leave ${r.from}`, onClick: () => {
         ctx.update(st => P.clearLeave(st, fromKey(r.from), fromKey(r.to), r.id)); paint(); ctx.render();
         undoToast(`Leave ${fd(r.from)} → ${fd(r.to)} removed`, () => { ctx.update(st => P.restoreLeave(st, r.entries)); if (wrap.isConnected) paint(); ctx.render(); }); } }, 'Remove')))) : null,

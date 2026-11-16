@@ -51,7 +51,11 @@ export function dayInfo(state, date) {
     // a swap: the colleague takes what you were rostered for, you take swap.code (often their shift, or off)
     const other = swap.with ? entries.find(e => e.rota === mine.rota && e.person.name === swap.with) : null;
     if (other) { other.code = mine.code; other.shift = interpretCode(other.code, other.rota.legend, other.rota.unitKind); other.swap = swap; }
-    mine.code = swap.code || ''; mine.shift = interpretCode(mine.code, mine.rota.legend, mine.rota.unitKind); mine.swap = swap;
+    // a cancelled shift is off whatever code was saved with it (beta T2-03); the MCI 2nd duty stays with the rostered shift,
+    // so it goes to the colleague who took it, not with you to another shift (beta T1-17)
+    const before = mine.code;
+    mine.code = swap.kind === 'cancel' ? '' : (swap.code || ''); mine.shift = interpretCode(mine.code, mine.rota.legend, mine.rota.unitKind); mine.swap = swap;
+    if (mine.code !== before) { if (other && mine.mci) other.mci = true; mine.mci = false; }
   }
   const working = entries.filter(e => e.shift.kind === 'work');
   const gp = working.filter(e => e.rota.unitKind === 'gp');

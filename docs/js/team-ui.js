@@ -5,7 +5,7 @@ import * as PU from './people-ui.js';
 import * as T from './team.js';
 import { allPeople } from './model.js';
 
-let ctx = null, part = 'people';
+let ctx = null, part = 'people', lastStar = 0;   // a double tap never stars the row that slid under the finger (beta T3-12)
 export function initTeam(c) { ctx = c; }
 export function teamPart(p) { if (['people', 'with'].includes(p)) part = p; }
 const S = () => ctx.S();
@@ -20,7 +20,7 @@ function personByKey(key) { return allPeople(S()).find(p => p.key === key); }
 function row(x) {
   const p = personByKey(x.key) || { name: x.name, id: x.key.startsWith('id:') ? x.key.slice(3) : '' };
   return h('div', { class: 'item clickable tw-row', onClick: () => ctx.personSheet(p) },
-    h('button', { class: `fav-star ${x.fav ? 'on' : ''}`, 'aria-pressed': x.fav ? 'true' : 'false', 'aria-label': `${x.fav ? 'Unstar' : 'Star'} ${x.name}`, onClick: (e) => { e.stopPropagation(); ctx.update(s => T.toggleFav(s, x.key)); } }, x.fav ? '⭐' : '☆'),
+    h('button', { class: `fav-star ${x.fav ? 'on' : ''}`, 'aria-pressed': x.fav ? 'true' : 'false', 'aria-label': `${x.fav ? 'Unstar' : 'Star'} ${x.name}`, onClick: (e) => { e.stopPropagation(); const t = Date.now(); if (t - lastStar < 450) return; lastStar = t; ctx.update(s => T.toggleFav(s, x.key)); } }, x.fav ? '⭐' : '☆'),
     h('div', { class: 'grow' }, h('div', { class: 'name' }, bare(x.name)), h('div', { class: 'meta' }, [`${x.n} shift${x.n === 1 ? '' : 's'} together`, x.nights ? `${x.nights} night${x.nights === 1 ? '' : 's'}` : '', x.site ? `mostly ${x.site.replace(/ office clinic.*/i, ' clinic')}` : ''].filter(Boolean).join(' · '))),
     x.next ? h('span', { class: 'chip' }, `next ${relDay(x.next) === fmtDateShort(x.next) ? fmtDateShort(x.next) : relDay(x.next).toLowerCase()}`) : h('span', { class: 'tiny dim' }, 'none coming'));
 }

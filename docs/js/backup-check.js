@@ -5,6 +5,7 @@
 // collections that are maps id → record
 const MAPS = ['rotas', 'swaps', 'posts', 'rotaChanges', 'shiftLog', 'favs', 'jobs', 'offers', 'payslips', 'creds', 'cme', 'inboxLog', 'deleted', 'stamps'];
 // maps whose values are not one record per key (notes: dateKey → text, deleted: key → time, mediaMeta: a settings object)
+const OWN = new Set([...MAPS, 'app', 'version', 'updatedAt', 'me', 'rules', 'settings', 'cv', 'migrated', 'outbox', 'google']);
 const SCALAR_MAPS = new Set(['deleted', 'stamps']);
 const isObj = (x) => !!x && typeof x === 'object' && !Array.isArray(x);
 const LABEL = { gp: 'GP', fsed: 'FSED', uv: 'Upper Village', lv: 'Lower Village', nurse: 'Nurses' };
@@ -34,6 +35,9 @@ export function checkBackup(json) {
   for (const [k, list] of Object.entries(s.plan || {})) { const ok = list.filter(isObj); if (ok.length !== list.length) { dropped.push(`${list.length - ok.length} plan block(s) on ${k}`); s.plan[k] = ok; } }
   if ('goals' in s && !Array.isArray(s.goals)) { delete s.goals; dropped.push('goals (not a list)'); } else if (s.goals) { const g = s.goals.filter(x => isObj(x) && typeof x.name === 'string'); if (g.length !== s.goals.length) dropped.push(`${s.goals.length - g.length} goal(s)`); s.goals = g; }
   if ('outbox' in s && !Array.isArray(s.outbox)) delete s.outbox;
+  // only what Mandarin owns comes in: contacts, memos, mood notes and the rest stay with their own app (beta T5-06)
+  const foreign = Object.keys(s).filter(k => !OWN.has(k)); for (const k of foreign) delete s[k];
+  if (foreign.length) dropped.push(`not Mandarin's: ${foreign.slice(0, 6).join(', ')}${foreign.length > 6 ? '…' : ''}`);
   if ('me' in s && s.me != null && !(isObj(s.me) && typeof s.me.name === 'string')) { delete s.me; dropped.push('“me” (unreadable)'); }
   for (const k of ['settings', 'rules', 'google']) if (k in s && !isObj(s[k])) { delete s[k]; dropped.push(`${k} (unreadable)`); }
   const rotas = Object.values(s.rotas).sort((a, b) => a.year - b.year || a.month - b.month).map(r => `${LABEL[r.unitKind] || r.unit || 'rota'} ${MON[r.month - 1]} ${r.year}`);

@@ -52,11 +52,20 @@ export function dayMarks(s, dates) {
 }
 
 // ───────── pasted posting list → tips
-const SITE_RE = [['UPV', /\b(upv|upper\s*vill?age?)\b/i], ['LPV', /\b(lpv|lower\s*vill?age?)\b/i], ['UPO', /\b(upo|upper\s*office(\s*clinic)?)\b/i], ['LPO', /\b(lpo|lower\s*office(\s*clinic)?)\b/i]];
+// office clinics first, so "upper office" is never read as Upper Village; "upper", "UV", "low village" are the villages (beta T3-08)
+const SITE_RE = [['UPO', /\b(upo|upper\s*office(\s*clinic)?)\b/i], ['LPO', /\b(lpo|lower\s*office(\s*clinic)?)\b/i], ['UPV', /\b(upv|uv|upper(\s*vill?age?)?)\b/i], ['LPV', /\b(lpv|lv|low(er)?(\s*vill?age?)?)\b/i]];
+// headings for the fixed posts: the nurses there stay at their usual post (not an error, not "no nurse by that name")
+const FIXED_RE = /\b(fsed|free\s*standing|aqua(\s*arabia)?|six\s*flags|sf\s*clinic|((upper|lower)\s*)?plat(eau|ue)|nairiya)\b/i;
+// a line copied from WhatsApp: "[16/11/2026, 19:02:11] Name TL: …" or "16/11/26, 7:02 pm - Name: …" (beta T3-05)
+const WA_PREFIX = /^\s*\[?\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4},?\s+\d{1,2}:\d{2}(:\d{2})?\s*([ap]\.?m\.?)?\]?\s*(-\s*)?([^:]{1,40}):\s*/i;
 const siteIn = (t) => SITE_RE.find(([, re]) => re.test(t))?.[0] || '';
 const stripSites = (t) => SITE_RE.reduce((a, [, re]) => a.replace(new RegExp(re.source, 'gi'), ' '), t);
 const toks = (t) => t.toLowerCase().normalize('NFKD').replace(/[^a-z\s-]/g, ' ').split(/[\s-]+/).filter(x => x.length >= 2);
-const NOISE = new Set(['day', 'night', 'shift', 'am', 'pm', 'and', 'sn', 'rn', 'tl', 'hn', 'fa', 'clinic', 'office', 'today', 'tomorrow', 'posting', 'postings', 'nurse', 'nurses', 'the', 'at', 'to', 'in', 'is', 'are', 'for', 'with', 'off']);
+const NOISE = new Set(['day', 'night', 'shift', 'am', 'pm', 'and', 'sn', 'rn', 'tl', 'hn', 'fa', 'clinic', 'office', 'today', 'tomorrow', 'tonight', 'posting', 'postings', 'nurse', 'nurses', 'the', 'at', 'to', 'in', 'is', 'are', 'for', 'with', 'off', 'float', 'floating',
+  // honorifics and greetings common in the nurses' groups (beta T3-06, T3-09)
+  'ma', 'maam', 'mam', 'madam', 'sir', 'sis', 'kuya', 'ate', 'ms', 'mr', 'mrs', 'dr', 'good', 'morning', 'evening', 'po', 'please', 'pls', 'thanks', 'thank', 'you', 'hi', 'hello', 'team', 'everyone', 'all', 'here', 'list', 'our', 'only', 'will', 'be']);
+/** Edit distance of two short words (for one-letter typos in names). */
+function dist(a, b) { if (Math.abs(a.length - b.length) > 2) return 9; const d = Array.from({ length: a.length + 1 }, (_, i) => [i]); for (let j = 1; j <= b.length; j++) d[0][j] = j; for (let i = 1; i <= a.length; i++) for (let j = 1; j <= b.length; j++) d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)); return d[a.length][b.length]; }
 /**
  * Reads a message like "UPV: Ann, Beth\nLower Village\n1. Cara\n2. Dina (N)" against the floating nurses of that day.
  * A line with only a site starts a block; a line with a site and names assigns those names. A name matches a nurse when its words start
@@ -66,23 +75,32 @@ export function parsePostingList(text, rows) {
   const cand = rows.filter(r => r.choices?.length).map(r => ({ r, t: toks(clean(r.person.name)) }));
   // nurses on a fixed post that day (FSED, Aqua…): matched only when no floater fits; the list wins — she is "pulled out" to that site
   const fixedCand = rows.filter(r => r.fixed && !r.choices?.length).map(r => ({ r, t: toks(clean(r.person.name)) }));
-  const hits = new Map(), unknown = [], offsite = []; let cur = '';
-  for (const raw of String(text || '').split(/\r?\n/)) {
-    const line = raw.replace(/^\s*[\d]+[.)]\s*|^\s*[-•*]\s*/, '').trim(); if (!line) continue;
-    const site = siteIn(line), rest = stripSites(line).replace(/\([^)]*\)/g, ' ');
+  const hits = new Map(), unknown = [], offsite = [], fuzzy = [], moved = [], fixedSeen = []; let cur = '', sender = '';
+  for (const raw0 of String(text || '').split(/\r?\n/)) {
+    const wa = WA_PREFIX.exec(raw0); if (wa) sender = sender || wa[5].trim();
+    const raw = wa ? raw0.slice(wa[0].length) : raw0;
+    const line = raw.replace(/'/g, '').replace(/^\s*[\d]+[.)]\s*|^\s*[-•*]\s*/, '').trim(); if (!line) continue;
+    if (FIXED_RE.test(line) && !siteIn(line.replace(FIXED_RE, ' '))) { cur = 'FIXED'; const rest0 = line.replace(FIXED_RE, ' ').replace(/[:=-]/g, ' '); if (!toks(rest0).filter(w => !NOISE.has(w)).length) continue; }
+    const site = cur === 'FIXED' && !siteIn(line) ? 'FIXED' : siteIn(line), rest = stripSites(line).replace(FIXED_RE, ' ').replace(/\([^)]*\)/g, ' ');
     const parts = rest.split(/[,;/&+]|\band\b/i).map(x => toks(x).filter(w => !NOISE.has(w))).filter(x => x.length);
     if (site && !parts.length) { cur = site; continue; }
+    if (!site && !parts.length) continue;
     const at = site || cur;
     for (const p of parts) {
       const fits = (c) => p.every(w => w.length >= 3 ? c.t.some(t => t.startsWith(w)) : c.t.includes(w)) && p.some(w => w.length >= 3);
+      // a nurse at a fixed post (FSED, Aqua…) under such a heading is simply at her usual place
+      if (at === 'FIXED') { const f = [...fixedCand, ...cand].filter(fits); if (f.length === 1) fixedSeen.push(f[0].r.person.name); else unknown.push({ text: p.join(' '), why: f.length ? `${f.length} nurses match` : 'not on shift at a fixed post' }); continue; }
       let m = cand.filter(fits);
+      // one-letter typos ("Edita", "Jasmine"): only when nothing matches exactly, and shown as a guess to check (beta T3-07)
+      if (!m.length) { const near = cand.filter(c => p.every(w => w.length < 4 ? c.t.includes(w) : c.t.some(t => dist(w, t.slice(0, Math.max(w.length, Math.min(t.length, w.length + 1)))) <= (w.length >= 6 ? 2 : 1) || dist(w, t) <= (w.length >= 6 ? 2 : 1)))); if (near.length === 1) { m = near; fuzzy.push({ text: p.join(' '), name: near[0].r.person.name }); } }
       if (!m.length && at) { const f = fixedCand.filter(fits); if (f.length === 1) { const r = f[0].r; hits.set(r.key, { key: r.key, name: r.person.name, site: at, row: r, pulled: r.fixed }); continue; } }
       const label = p.join(' ');
       if (m.length !== 1) { unknown.push({ text: label, why: m.length ? `${m.length} nurses match` : 'no nurse on shift by that name' }); continue; }
       if (!at) { unknown.push({ text: label, why: 'no site before it' }); continue; }
-      const r = m[0].r; if (!r.choices.includes(at)) { offsite.push({ key: r.key, name: r.person.name, site: at }); continue; }
+      const r = m[0].r; if (!r.choices.includes(at)) { offsite.push({ key: r.key, name: r.person.name, site: at, row: r }); continue; }
+      const was = hits.get(r.key); if (was && was.site !== at) moved.push({ name: r.person.name, from: was.site, to: at });   // listed twice: the last one wins, and it says so
       hits.set(r.key, { key: r.key, name: r.person.name, site: at, row: r });
     }
   }
-  return { hits: [...hits.values()], unknown, offsite };
+  return { hits: [...hits.values()], unknown, offsite, fuzzy, moved, fixed: fixedSeen, sender };
 }

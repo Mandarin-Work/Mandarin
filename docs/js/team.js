@@ -1,6 +1,6 @@
 // Who you work with (pure): history across every loaded rota (your corrections included), favourite colleagues,
 // and the evening-before look at tomorrow's team. Uses dayInfo, so a swap you recorded changes who you were with.
-import { dayInfo, myDay } from './model.js';
+import { dayInfo, myDay, shiftWindow } from './model.js';
 import { overlapModel } from './board.js';
 import { keyOf, addDays, startOfDay } from './util.js';
 
@@ -23,7 +23,8 @@ function myWorkDays(s) {
       if (!info.mine || info.mine.shift.kind !== 'work') continue;
       const ov = overlapModel(info.mine, [...info.withMe, ...info.alsoAtSite]);
       const people = (ov?.rows || []).filter(r => r.pct >= 0.5).map(r => r.entry.person);
-      out.push({ date, key: keyOf(date), code: info.mine.code, site: info.mine.shift.site || '', type: info.mine.shift.type || '', people });
+      const w = shiftWindow(date, info.mine.shift);
+      out.push({ date, key: keyOf(date), end: w ? w.end : addDays(date, 1), code: info.mine.code, site: info.mine.shift.site || '', type: info.mine.shift.type || '', people });
     }
   }
   return out.sort((a, b) => a.date - b.date);
@@ -31,11 +32,11 @@ function myWorkDays(s) {
 
 /** Colleagues by how often you share a shift: [{key, name, n, past, next (Date|null), last (Date|null), nights, fav}] most first. */
 export function history(s, now = new Date()) {
-  const t = keyOf(now), by = new Map();
+  const by = new Map();
   for (const d of myWorkDays(s)) for (const p of d.people) {
     const k = pkey(p), x = by.get(k) || { key: k, name: p.name, n: 0, past: 0, nights: 0, last: null, next: null, sites: {} };
     x.n++; if (d.type === 'N') x.nights++; x.sites[d.site] = (x.sites[d.site] || 0) + 1;
-    if (d.key < t) { x.past++; x.last = d.date; } else if (!x.next) x.next = d.date;
+    if (d.end <= now) { x.past++; x.last = d.date; } else if (!x.next) x.next = d.date;   // a shift together that has ended is past, even today (beta T3-13)
     by.set(k, x);
   }
   return [...by.values()].map(x => ({ ...x, fav: isFav(s, x.key), site: Object.entries(x.sites).sort((a, b) => b[1] - a[1])[0]?.[0] || '' }))
@@ -43,8 +44,10 @@ export function history(s, now = new Date()) {
 }
 /** The next shifts you share with one colleague (up to `max`). */
 export function nextWith(s, key, now = new Date(), max = 6) {
-  const t = keyOf(now); return myWorkDays(s).filter(d => d.key >= t && d.people.some(p => pkey(p) === key)).slice(0, max);
+  return myWorkDays(s).filter(d => d.end > now && d.people.some(p => pkey(p) === key)).slice(0, max);
 }
+/** Every day you share a shift with one colleague (date keys), past and coming: the one definition all screens use (beta T3-04). */
+export const daysWith = (s, key) => new Set(myWorkDays(s).filter(d => d.people.some(p => pkey(p) === key)).map(d => d.key));
 /** Your coming shifts with a favourite on them: the good news line. */
 export function favShifts(s, now = new Date(), days = 14) {
   const t = keyOf(now), end = keyOf(addDays(startOfDay(now), days));

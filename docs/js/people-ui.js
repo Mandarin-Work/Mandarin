@@ -1,9 +1,9 @@
 // People: one directory for every schedule you have (GPs, ER specialists, nurses), the nurses' postings board, and who will
 // work with you. Used by Team / Nurses, the day sheet and Today. Contact cards (numbers, socials, notes) belong to Clementine:
 // Mandarin shows a read-only copy (directory.js) and the rota's own number, and links people by rota key only.
-import { h, toast, keyOf, addDays, startOfDay, relDay, fmtMin, fmtDur, DAY_SHORT, MONTHS } from './util.js';
+import { h, toast, keyOf, fromKey, addDays, startOfDay, relDay, fmtDur, DAY_SHORT, MONTHS } from './util.js';
 const initials = (n) => String(n).replace(/^Dr\.?\s*/i, '').split(/\s+/).filter(Boolean).slice(0, 2).map(x => x[0]).join('').toUpperCase();
-import { dayInfo, allPeople, isMe, sharedShifts } from './model.js';
+import { dayInfo, allPeople, isMe } from './model.js';
 import { interpretCode } from './rota-parser.js';
 import * as DIR from './directory.js';
 import * as T from './team.js';
@@ -22,7 +22,10 @@ let fid = 0;   // labels are tied to their inputs (screen readers, tap on the la
 const field = (label, input, note = null) => { const id = input.id || (input.id = `pf-${++fid}`); return h('div', { class: 'field' }, label ? h('label', { for: id }, label) : null, input, note); };
 const hm = (m) => `${String(Math.floor(m / 60) % 24).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
 const dayLabel = (d) => `${DAY_SHORT[d.getDay()]} ${d.getDate()} ${MONTHS[d.getMonth()].slice(0, 3)}`;
-export const goNurses = (date) => { if (date) nDate = startOfDay(date); };
+export const goNurses = (date) => { if (date) { nDate = startOfDay(date); nPinned = true; } };
+let nPinned = false;
+/** Entering the Nurses tab with no date: the day of the shift you are on now (last night's after midnight), else today (beta T3-03). */
+export function nursesNow() { if (nPinned) { nPinned = false; return; } const s = S(), now = new Date(), cur = s ? myShiftNow(s, now) : null; nDate = cur?.live ? cur.date : startOfDay(now); }
 const closeSheets = () => document.querySelectorAll('.sheet-bg').forEach(e => e.remove());
 /** A sheet that ignores the second tap of a double tap (it would land on the backdrop and close the sheet at once). */
 const steadySheet = (content) => { const r = ctx.sheet(content), bg = r.box?.parentElement, t0 = Date.now(); bg?.addEventListener('click', (e) => { if (e.target === bg && Date.now() - t0 < 350) e.stopImmediatePropagation(); }, true); return r; };
@@ -60,10 +63,10 @@ export function personBlock(p) {
     // today's place in the same three looks as the board: confirmed / heard ? / guess (last time?)
     const where = !row ? null : row.post ? h('span', { class: 'nb-t sure' }, ` · ✓ at ${N.siteLabel(row.post)}`) : row.tip ? h('span', { class: `nb-t ${row.tip.guess ? 'guess' : 'heard'}` }, ` · ${tipText(row.tip)} · not confirmed`) : N.isFloater(row.group) ? h('span', { class: 'dim' }, ' · not posted yet') : null;
     out.push(h('div', { class: 'card' }, h('div', { class: 'title' }, 'Nurse'), h('div', { class: 'small' }, [g?.label, np.clinic ? `clinic ${np.clinic}` : '', np.leader ? 'team leader' : N.canLead(s, key) ? 'can lead' : '', np.fa ? 'first aider' : ''].filter(Boolean).join(' · '), np.pulledOut ? h('span', { class: 'chip late nb-tag' }, `pulled out → ${np.pulledOut}`) : null),
-      end ? h('div', { class: 'small nb-end', style: { marginTop: '6px' } }, `⏳ Contract ${end.inDays < 0 ? 'ended' : 'ends'} ${dayLabel(end.date)}${end.lastShift ? ` · last shift ${dayLabel(end.lastShift)}` : ''}${end.inDays > 0 ? ` (in ${plural(end.inDays, 'day')})` : ''}`) : null,
+      end ? h('div', { class: 'small nb-end', style: { marginTop: '6px' } }, `⏳ Contract ${end.inDays < 0 ? 'ended' : 'ends'} ${dayLabel(end.date)}${end.inDays > 0 ? ` (in ${plural(end.inDays, 'day')})` : ''}${end.lastShift ? ` · last shift ${dayLabel(end.lastShift)}` : ''}`) : null,
       row ? h('div', { class: 'small', style: { marginTop: '6px' } }, `Today: ${row.shift.label}`, where) : null,
       !np.leader && N.isFloater(np.group) ? h('button', { class: `chip ${N.canLead(s, key) ? 'sel' : ''}`, style: { marginTop: '6px' }, 'aria-pressed': N.canLead(s, key) ? 'true' : 'false', onClick: () => { ctx.update(x => N.setCanLead(x, key, !N.canLead(x, key))); closeSheets(); ctx.render(); ctx.personSheet(p); } }, N.canLead(s, key) ? '★ Can be team leader' : '☆ Can be team leader?') : null,
-      hist.length ? h('div', { class: 'tiny dim', style: { marginTop: '6px' } }, 'Recent confirmed postings: ' + hist.map(x => `${x.date.slice(5)} ${x.site}`).join(' · ')) : null));
+      hist.length ? h('div', { class: 'tiny dim', style: { marginTop: '6px' } }, 'Recent confirmed postings: ' + hist.map(x => `${dayLabel(fromKey(x.date))} ${x.site}`).join(' · ')) : null));
   }
   return out;
 }
@@ -81,7 +84,8 @@ export function renderDirectory() {
   const input = h('input', { type: 'search', placeholder: 'Search name, title, unit, clinic, note or number', value: query, class: 'dir-search', 'aria-label': 'Search people', onInput: (e) => { query = e.target.value; paintList(); } });
   const seg = h('div', { class: 'seg dir-seg', role: 'tablist' }, CATS.filter(([k]) => counts[k]).map(([k, l, sh]) => h('button', { class: cat === k ? 'active' : '', role: 'tab', 'aria-selected': String(cat === k), 'aria-label': `${l} ${counts[k]}`, onClick: () => { cat = k; ctx.render(); } }, h('span', { class: 'l-long' }, l), h('span', { class: 'l-short' }, sh), h('small', {}, counts[k] || 0))));
   const nurseMap = new Map(N.nurses(s).map(n => [ctx.personKeyOf(n), n]));
-  const base = people.filter(p => cat === 'all' || catOf(p.units) === cat).map(p => { const st = PL.shiftState(s, p.key, now), t = st?.yesterday ? st.today : st; return { p, n: nurseMap.get(p.key), st, t, c: DIR.contactOf(p.key), fav: T.isFav(s, p.key), shared: sharedShifts(s, p.key).length }; })
+  const hist = new Map(T.history(s, now).map(x => [x.key, x.n]));   // one count of shifts together for every screen
+  const base = people.filter(p => cat === 'all' || catOf(p.units) === cat).map(p => { const st = PL.shiftState(s, p.key, now), t = st?.yesterday ? st.today : st; return { p, n: nurseMap.get(p.key), st, t, c: DIR.contactOf(p.key), fav: T.isFav(s, p.key), shared: hist.get(p.key) || 0 }; })
     .filter(x => cat !== 'nurse' || ngroup === 'all' || x.n?.group === ngroup);
   const isToday = (x) => x.t?.sh.kind === 'work', isNow = (x) => x.st?.state === 'now' || x.st?.state === 'tail';
   const nToday = base.filter(isToday).length, nNow = base.filter(isNow).length;
@@ -147,7 +151,16 @@ function siteTile(id, rows, date, tips = []) {
   const row = (r) => { const k = kindOf(r); return h('div', { class: `post-row ${k}` }, h('button', { class: 'pr-main', title: k === 'sure' ? 'Move or clear' : 'Confirm, move or forget', onClick: () => postSheet(r, date) }, ctx.shiftChip(r.shift, r.code), h('span', { class: 'ellipsis' }, nm(r)), k === 'sure' ? null : h('small', { class: 'pr-why' }, k === 'guess' ? 'last time?' : `heard${r.tip.from ? ' · ' + r.tip.from : ''}`)), h('button', { class: 'x', 'aria-label': `Clear ${nm(r)}`, title: 'Clear (can undo)', onClick: () => clearPost(r, date) }, '×')); };
   return h('div', { class: `post-tile ${id}` }, h('div', { class: 'row' }, h('b', { class: 'grow' }, N.siteLabel(id)),
     h('span', { class: 'chip pt-count', title: `${sure.length} confirmed${heard.length ? `, ${heard.length} heard` : ''}${guess.length ? `, ${guess.length} guessed` : ''}` }, h('b', {}, sure.length), heard.length ? h('span', { class: 'pt-heard' }, ` +${heard.length}?`) : null, guess.length ? h('span', { class: 'pt-guess' }, ` ~${guess.length}`) : null)),
-    sure.map(row), heard.map(row), guess.map(row), !sure.length && !tips.length ? h('div', { class: 'tiny dim' }, 'nobody yet') : null);
+    usualLine(id, sure, date), sure.map(row), heard.map(row), guess.map(row), !sure.length && !tips.length ? h('div', { class: 'tiny dim' }, 'nobody yet') : null);
+}
+/** "day 3 of 5 · night 1 of 2": confirmed against the usual staffing (Settings › Customise › Nurse staffing), per shift kind on the board (beta T3-10). */
+function usualLine(id, sure, date) {
+  const s = S(), byKind = {};
+  for (const r of N.rowsFor(s, date)) if (r.shift?.hours && (N.isFloater(r.group) || r.pulledFrom)) { const k = N.shiftKind(r.shift); if (!byKind[k]) byKind[k] = { sh: r.shift, n: 0 }; }
+  for (const r of sure) { const k = N.shiftKind(r.shift); (byKind[k] ||= { sh: r.shift, n: 0 }).n++; }
+  const bits = Object.entries(byKind).map(([k, v]) => { const u = N.seatsFor(s, v.sh, date)?.[id]; return Number.isFinite(u) ? { k, n: v.n, u } : null; }).filter(Boolean).filter(b => b.u || b.n);
+  if (!bits.length) return bits.length === 0 && Object.keys(byKind).length ? h('div', { class: 'tiny dim' }, 'closed on this shift') : null;
+  return h('div', { class: 'tiny pt-usual' }, bits.map((b, i) => h('span', { class: b.n < b.u ? 'late' : b.n > b.u ? 'warnc' : 'ok' }, `${i ? ' · ' : ''}${b.k} ${b.n} of ${b.u}`)));
 }
 /** The 7 days around the board's day: a dot per day for confirmed (green), heard (amber ring) or guesses only (grey ring), and your shift. */
 function dayStrip(s, date) {
@@ -166,9 +179,16 @@ function pasteSheet(date, text = '') {
   let res = { hits: [], unknown: [], offsite: [] };
   const save = (tip) => { if (!res.hits.length) return; heardFrom = src.value.trim(); ctx.update(x => res.hits.reduce((a, m) => N.setPost(a, date, m.key, m.site, { ...(tip ? { tip: true, from: heardFrom } : {}), ...(m.pulled ? { pulled: m.pulled } : {}) }), x)); closeSheets(); toast(`${plural(res.hits.length, 'nurse')} saved as ${tip ? 'heard' : 'confirmed'}`); };
   const b1 = h('button', { class: 'btn primary grow', onClick: () => save(true) }, 'Save as heard'), b2 = h('button', { class: 'btn grow', onClick: () => save(false) }, 'Save as confirmed');
-  const paint = () => { res = NB.parsePostingList(ta.value, rows); const by = {}; res.hits.forEach(m => (by[m.site] ||= []).push(m));
-    out.replaceChildren(...Object.entries(by).map(([site, l]) => h('div', { class: 'small' }, h('b', {}, `${N.siteLabel(site)} (${l.length}) `), l.map(m => names.get(m.key) || m.name).join(', '))),
-      ...res.offsite.map(m => h('div', { class: 'tiny pc-note bad' }, `${m.name}: cannot be posted to ${m.site}`)), res.unknown.length ? h('div', { class: 'tiny dim' }, `Not matched: ${res.unknown.map(u => `“${u.text}” (${u.why})`).join(', ')}`) : null);
+  const usual = (site) => { const any = rows.find(r => r.shift?.hours); const seats = any ? N.seatsFor(s, any.shift, date) : null; return seats?.[site]; };
+  const anyway = new Set();   // "post anyway" for a site the usual staffing closes: the list wins over the sheet (beta T3-20)
+  const paint = () => { res = NB.parsePostingList(ta.value, rows); res.hits.push(...res.offsite.filter(m => anyway.has(m.key)).map(m => ({ ...m, pulled: m.row?.fixed }))); const by = {}; res.hits.forEach(m => (by[m.site] ||= []).push(m));
+    if (res.sender && !src.value) src.value = res.sender.replace(/\s+(tl|hn|rn|sn)$/i, '');
+    out.replaceChildren(...Object.entries(by).map(([site, l]) => { const u = usual(site); return h('div', { class: 'small' }, h('b', {}, `${N.siteLabel(site)} (${l.length}${Number.isFinite(u) ? ` · usual ${u}` : ''}) `), Number.isFinite(u) && l.length > u ? h('span', { class: 'late' }, 'more than usual · ') : null, l.map(m => names.get(m.key) || m.name).join(', ')); }),
+      ...res.fuzzy.map(f => h('div', { class: 'tiny pc-note' }, `“${f.text}” read as ${f.name}: check it`)),
+      ...res.moved.map(m => h('div', { class: 'tiny pc-note' }, `${m.name} is listed twice (${m.from}, ${m.to}): using ${m.to}`)),
+      res.fixed.length ? h('div', { class: 'tiny dim' }, `At their usual fixed post: ${res.fixed.join(', ')}`) : null,
+      ...res.offsite.filter(m => !anyway.has(m.key)).map(m => h('div', { class: 'tiny pc-note bad row' }, h('span', { class: 'grow' }, `${m.name}: ${m.site} is usually closed for her group on this shift`), h('button', { class: 'btn sm ghost', onClick: () => { anyway.add(m.key); paint(); } }, 'Post anyway'))),
+      res.unknown.length ? h('div', { class: 'tiny dim' }, `Not matched: ${res.unknown.map(u => `“${u.text}” (${u.why})`).join(', ')}`) : null);
     b1.disabled = b2.disabled = !res.hits.length; b1.textContent = res.hits.length ? `Save ${res.hits.length} as heard` : 'Save as heard'; };
   if (text) ta.value = text;
   ta.addEventListener('input', paint); paint();
@@ -181,7 +201,8 @@ export function renderNurses() {
   const s = S(), date = nDate, rota = N.nurseRotaFor(s, date); names = nurseNames(s);
   const to = (d) => { nDate = d; ctx.render(); };
   const nav = h('div', { class: 'row nb-nav' }, h('button', { class: 'btn icon', 'aria-label': 'Previous day', onClick: () => to(addDays(nDate, -1)) }, '‹'), h('div', { class: 'grow', style: { textAlign: 'center' } }, h('b', {}, dayLabel(date)), h('div', { class: 'tiny dim' }, relDay(date))), h('button', { class: 'btn icon', 'aria-label': 'Next day', onClick: () => to(addDays(nDate, 1)) }, '›'));
-  const today = startOfDay(new Date()), quick = h('div', { class: 'chips nb-quick' }, h('button', { class: `chip ${+date === +today ? 'sel' : ''}`, onClick: () => to(today) }, 'Today'), h('button', { class: `chip ${+date === +addDays(today, 1) ? 'sel' : ''}`, onClick: () => to(addDays(today, 1)) }, 'Tomorrow'), rota ? h('button', { class: 'chip', onClick: () => pasteSheet(date) }, '📋 Paste list') : null);
+  const today = startOfDay(new Date()), on = myShiftNow(s, new Date()), tail = on.live && +on.date < +today ? on.date : null;
+  const quick = h('div', { class: 'chips nb-quick' }, tail ? h('button', { class: `chip ${+date === +tail ? 'sel' : ''}`, title: 'The night you are on now', onClick: () => to(tail) }, 'Last night (on now)') : null, h('button', { class: `chip ${+date === +today ? 'sel' : ''}`, onClick: () => to(today) }, 'Today'), h('button', { class: `chip ${+date === +addDays(today, 1) ? 'sel' : ''}`, onClick: () => to(addDays(today, 1)) }, 'Tomorrow'), rota ? h('button', { class: 'chip', onClick: () => pasteSheet(date) }, '📋 Paste list') : null);
   const board = h('div', { class: 'nb-board', onTouchstart: (e) => { const t = e.touches[0]; swipeX = e.target.closest('input, textarea, .nb-strip') ? null : [t.clientX, t.clientY]; }, onTouchend: (e) => { if (!swipeX) return; const t = e.changedTouches[0], dx = t.clientX - swipeX[0], dy = t.clientY - swipeX[1]; swipeX = null; if (Math.abs(dx) > 70 && Math.abs(dy) < 45) to(addDays(nDate, dx < 0 ? 1 : -1)); } }, nav, dayStrip(s, date), quick);
   if (!rota) { board.append(h('div', { class: 'card' }, h('div', { class: 'empty' }, h('div', { class: 'big' }, '🩺'), `No nurse schedule for ${MONTHS[date.getMonth()]} ${date.getFullYear()}`), h('div', { class: 'row', style: { justifyContent: 'center' } }, ctx.importButton('Import nurse schedule')))); return board; }
   const st = N.staffing(s, date), floaters = st.rows.filter(r => (N.isFloater(r.group) || r.pulledFrom) && r.group !== 'head'), unposted = floaters.filter(r => !r.post), sug = unposted.filter(r => r.suggest);
@@ -191,12 +212,12 @@ export function renderNurses() {
     h('div', { class: 'nb-meter', role: 'img', 'aria-label': `${floaters.length - unposted.length} confirmed, ${heardN} heard, ${guessN} guessed, ${openN} open` }, ['sure', 'heard', 'guess', 'open'].map((k, i) => { const n = [floaters.length - unposted.length, heardN, guessN, openN][i]; return n ? h('i', { class: k, style: { flexGrow: n } }) : null; })),
     h('div', { class: 'chips nb-legend' }, h('span', { class: 'chip sure' }, `✓ ${floaters.length - unposted.length} confirmed`), heardN ? h('span', { class: 'chip tip' }, `${heardN} heard?`) : null, guessN ? h('span', { class: 'chip guess' }, `${guessN} guesses`) : null, openN ? h('span', { class: 'chip late' }, `${openN} open`) : floaters.length && !unposted.length ? h('span', { class: 'chip sel' }, 'all confirmed') : null),
     head.length ? h('div', { class: 'tiny dim nb-line' }, `Head nurse on: ${head.map(r => `${nm(r)} ${hrs(r.shift)}`).join(', ')} · supervises all sites`) : null,
-    ends.map(e => h('button', { class: 'tiny nb-line nb-end', onClick: () => { const p = N.nurses(s).find(n => N.keyOfPerson(n) === e.key); if (p) ctx.personSheet(p); } }, `⏳ ${names.get(e.key) || e.name}: contract ends ${dayLabel(e.date)}${e.lastShift ? ` · last shift ${dayLabel(e.lastShift)}` : ''}${e.inDays ? ` (in ${plural(e.inDays, 'day')})` : ' (today)'}`)));
+    ends.map(e => h('button', { class: 'tiny nb-line nb-end', onClick: () => { const p = N.nurses(s).find(n => N.keyOfPerson(n) === e.key); if (p) ctx.personSheet(p); } }, `⏳ ${names.get(e.key) || e.name}: contract ends ${dayLabel(e.date)}${e.inDays ? ` (in ${plural(e.inDays, 'day')})` : ' (today)'}${e.lastShift ? ` · last shift ${dayLabel(e.lastShift)}` : ''}`)));
   const myInfo = dayInfo(s, date), wc = myInfo.mine ? withMeCard(date, myInfo.mine, true) : null; if (wc) wc.classList.add('nb-o2');
   const confirmHeard = unposted.filter(r => r.tip && !r.tip.guess);
   const posts = h('div', { class: 'card nb-o3' }, h('div', { class: 'row wrap' }, h('div', { class: 'title grow' }, 'Postings'),
-      confirmHeard.length ? h('button', { class: 'btn sm', title: 'Turn every heard tip into a confirmed posting', onClick: () => { ctx.update(x => confirmHeard.reduce((a, r) => N.setPost(a, date, r.key, r.tip.site), x)); undoToast(`${plural(confirmHeard.length, 'tip')} confirmed`, () => ctx.update(x => confirmHeard.reduce((a, r) => N.setPost(a, date, r.key, r.tip.site, { tip: true, from: r.tip.from }), x))); } }, `✓ Confirm heard (${confirmHeard.length})`) : null,
-      sug.length ? h('button', { class: 'btn sm guess', title: 'Saved as guesses (dotted), never as confirmed postings', onClick: () => { ctx.update(x => N.applySuggestions(x, date)); undoToast(`${sug.length} saved as ${sug.length === 1 ? 'a guess' : 'guesses'} (last time) — confirm each`, () => ctx.update(x => sug.reduce((a, r) => N.setPost(a, date, r.key, ''), x))); } }, `Guess from last time (${sug.length})`) : null),
+      confirmHeard.length ? h('button', { class: 'btn sm', title: 'Turn every heard tip into a confirmed posting', onClick: () => { ctx.update(x => confirmHeard.reduce((a, r) => N.setPost(a, date, r.key, r.tip.site), x)); undoToast(`${plural(confirmHeard.length, 'tip')} confirmed`, () => ctx.update(x => confirmHeard.reduce((a, r) => N.postOf(a, date, r.key) === r.tip.site ? N.setPost(a, date, r.key, r.tip.site, { tip: true, from: r.tip.from }) : a, x))); } }, `✓ Confirm heard (${confirmHeard.length})`) : null,
+      sug.length ? h('button', { class: 'btn sm guess', title: 'Saved as guesses (dotted), never as confirmed postings', onClick: () => { ctx.update(x => N.applySuggestions(x, date)); undoToast(`${sug.length} saved as ${sug.length === 1 ? 'a guess' : 'guesses'} (last time) — confirm each`, () => ctx.update(x => sug.reduce((a, r) => N.tipOf(a, date, r.key)?.guess && !N.postOf(a, date, r.key) ? N.setPost(a, date, r.key, '') : a, x))); } }, `Guess from last time (${sug.length})`) : null),
     h('div', { class: 'post-grid' }, N.SITES.map(t => siteTile(t.id, st.rows.filter(r => r.post === t.id), date, st.rows.filter(r => !r.post && r.tip?.site === t.id)))),
     h('div', { class: 'tiny dim nb-key' }, h('span', { class: 'k sure' }, 'confirmed'), h('span', { class: 'k heard' }, 'heard ?'), h('span', { class: 'k guess' }, 'guess (last time?)'), ' · tap a name to confirm, move or clear'));
   // where the tip came from: the head nurse and team leaders only; the last source you used is picked again
@@ -240,7 +261,7 @@ export function withMeCard(date, mine, onBoard = false) {
   const more = moreRows.length ? h('details', { class: 'nr-more' }, h('summary', {}, `Show ${moreRows.length} more`), moreRows.map(r => row(r, 'maybe'))) : null;
   const chips = flat ? h('details', { class: 'nr-more', open: onBoard && !w.confirmed.length && !heard.length ? '' : null }, h('summary', {}, `Who could be sent (${poss.length}) · ${poss[0].pct >= 0.995 ? 'all cover your whole shift' : `each covers ${Math.round(poss[0].pct * 100)}%`}`),
     h('div', { class: 'chips nr-chips' }, poss.map(r => h('button', { class: `chip nr-chip ${r.friend ? 'fr' : ''}`, title: label(r), onClick: () => { closeSheets(); ctx.personSheet(r.person); } }, r.friend ? '⭐ ' : '', nm(r), h('small', {}, ` ${r.shift.type}`))))) : null;
-  const go = onBoard ? null : h('button', { class: 'btn sm', onClick: () => { closeSheets(); goNurses(date); ctx.go('rota', 'nurses'); } }, w.unposted ? (dayWord(date) === 'today' ? 'Set today’s postings' : `Set postings for ${dayLabel(date)}`) : 'Open postings');
+  const go = onBoard ? null : h('button', { class: 'btn sm', onClick: () => { closeSheets(); ctx.go('nurses', date); } }, w.unposted ? (dayWord(date) === 'today' ? 'Set today’s postings' : `Set postings for ${dayLabel(date)}`) : 'Open postings');
   const sub = (t, n) => h('div', { class: 'nr-sub' }, t, n != null ? h('b', {}, n) : null);
   return h('div', { class: 'card nr' }, h('div', { class: 'title' }, w.site ? `Nurses at ${N.siteLabel(w.site)}` : 'Nurses on your shift'),
     h('div', { class: `ov-head ${w.confirmed.length ? 'ok' : 'warn'}` }, w.summary || (w.unposted ? 'No postings yet and nobody else overlaps your shift' : 'No nurses overlap your shift')),
@@ -257,8 +278,8 @@ export function withMeCard(date, mine, onBoard = false) {
 function myShiftNow(s, now) {
   const yd = addDays(startOfDay(now), -1), y = dayInfo(s, yd).mine, yh = y?.shift.kind === 'work' && y.shift.hours;
   if (yh && (yh.overnight || yh.end <= yh.start) && now < addDays(yd, 1).getTime() + (yh.end % 1440) * 6e4) return { date: yd, mine: y, live: true };
-  const t = dayInfo(s, now).mine, th = t?.shift.kind === 'work' && t.shift.hours, d0 = startOfDay(now).getTime();
-  return { date: startOfDay(now), mine: t, live: !!th && now >= d0 + th.start * 6e4 && now < d0 + (th.end <= th.start ? th.end + 1440 : th.end) * 6e4 };
+  const t = dayInfo(s, now).mine, th = t?.shift.kind === 'work' && t.shift.hours, d0 = startOfDay(now).getTime(), end = th ? d0 + (th.end <= th.start ? th.end + 1440 : th.end) * 6e4 : 0;
+  return { date: startOfDay(now), mine: t, live: !!th && now >= d0 + th.start * 6e4 && now < end, ended: !!th && now >= end };
 }
 /** Tomorrow's postings, worth a nudge only when you work tomorrow and somebody who could be at your site is not confirmed yet. */
 function eveningNudge(s, now) {
@@ -276,21 +297,23 @@ function todayCardInner() {
   if (!ctx) return null;
   const s = S(), now = new Date(), cards = [];
   if (!s?.rotas || !N.nurseRotas(s).length) return null; names = nurseNames(s);
-  const cur = myShiftNow(s, now), w = cur.mine ? N.workingWithMe(s, cur.date, cur.mine) : null;
+  // once today's shift is over the card stops describing it (the evening nudge below is about tomorrow, beta T1-03)
+  const cur = myShiftNow(s, now), w = cur.mine && !cur.ended ? N.workingWithMe(s, cur.date, cur.mine) : null;
   if (w && w.hasNurses && (w.confirmed.length || w.possible.length || w.tipped.length)) {
     const heard = w.tipped.filter(r => !r.guess), guess = w.tipped.filter(r => r.guess), list = (l, q = '') => l.slice(0, 3).map(r => nm(r) + q).join(', ') + (l.length > 3 ? ` +${l.length - 3}` : '');
-    const head = w.confirmed.length ? `${plural(w.confirmed.length, 'nurse')} posted with you` : heard.length ? `${heard.length} heard to be with you` : `${plural(w.possible.length, 'nurse')} could be with you`;
+    // one wording everywhere: "N candidates for P places at <site>" (the briefing's), never a bare "could be with you" (beta T1-24)
+    const head = w.confirmed.length ? `${plural(w.confirmed.length, 'nurse')} posted with you` : heard.length ? `${heard.length} heard to be with you` : (w.summary || `${plural(w.possible.length, 'nurse')} could be with you`).replace(/ · not posted yet$/, '');
     cards.push(h('div', { class: 'row ch-line' }, h('span', { class: 'ch-ic sm' }, '🩺'), h('div', { class: 'grow' }, h('div', { class: 'name' }, head, cur.date < startOfDay(now) ? h('span', { class: 'tiny dim' }, ' · last night’s shift') : null),
       w.confirmed.length ? h('div', { class: 'tiny nr-t sure' }, '✓ ' + list(w.confirmed)) : null,
       heard.length ? h('div', { class: 'tiny nr-t heard' }, 'heard: ' + list(heard, '?')) : null,
       guess.length ? h('div', { class: 'tiny nr-t guess' }, 'guess: ' + list(guess, '?') + ' (last time)') : null,
       !w.confirmed.length && !heard.length ? h('div', { class: 'tiny dim' }, w.likely.length ? `likely: ${list(w.likely)} · not posted yet` : 'not posted yet') : null),
-      h('button', { class: 'btn sm', onClick: () => { goNurses(cur.date); ctx.go('rota', 'nurses'); } }, 'Open')));
+      h('button', { class: 'btn sm', onClick: () => { ctx.go('nurses', cur.date); } }, 'Open')));
   }
   const nz = eveningNudge(s, now);
   if (nz) cards.push(h('div', { class: 'row ch-line nb-nudge' }, h('span', { class: 'ch-ic sm' }, '🌙'), h('div', { class: 'grow' }, h('div', { class: 'name' }, `Postings for tomorrow${nz.w.site ? ' at ' + N.siteLabel(nz.w.site) : ''}`),
     h('div', { class: 'tiny dim' }, [nz.open ? `${nz.open} could be sent to you, not set` : '', nz.heard ? `${nz.heard} heard` : '', nz.guess ? `${nz.guess} guessed` : ''].filter(Boolean).join(' · ') + ' · confirm when you hear')),
-    h('button', { class: 'btn sm primary', onClick: () => { goNurses(nz.tm); ctx.go('rota', 'nurses'); } }, 'Set')));
+    h('button', { class: 'btn sm primary', onClick: () => { ctx.go('nurses', nz.tm); } }, 'Set')));
   return cards.length ? h('div', { class: 'card' }, h('div', { class: 'title' }, 'Nurses'), cards) : null;
 }
 
@@ -319,7 +342,7 @@ export function personRota(p) {
   const today = new Date(), nowKey = `${today.getFullYear()}-${today.getMonth() + 1}`, mine = isMe(s, p);
   const pick = () => { const want = pMonth[key]; return all.find(r => r.id === want) || all.find(r => `${r.year}-${r.month}` === nowKey) || all[all.length - 1]; };
   const wrap = h('div', { class: 'card prota' }); let cur = pick(), sel = null;
-  const sharedDates = new Set(mine ? [] : sharedShifts(s, key).map(x => keyOf(x.date)));
+  const sharedDates = mine ? new Set() : T.daysWith(s, key);
   function paint() {
     const r = cur, person = r.people.find(x => ctx.personKeyOf(x) === key), first = new Date(r.year, r.month - 1, 1), idx = all.indexOf(r);
     const shared = [...sharedDates].filter(k => k.startsWith(`${r.year}-${String(r.month).padStart(2, '0')}`)).length, st = PL.monthStats(r, person);

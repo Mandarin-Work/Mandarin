@@ -10,6 +10,10 @@ export const KINDS = [
   ['other', 'Other', ''],
 ];
 export const KIND_LABEL = Object.fromEntries(KINDS.map(([k, l]) => [k, l]));
+/** One warning window everywhere: Today, the briefing and Citrus (beta T4-12). */
+export const WARN_DAYS = 60;
+/** "expires tomorrow", "expired 3 days ago", "expires in 1 day" (beta T1-21, T4-22). */
+export const dueWords = (d) => d < -1 ? `expired ${-d} days ago` : d === -1 ? 'expired yesterday' : d === 0 ? 'expires today' : d === 1 ? 'expires tomorrow' : `expires in ${d} days`;
 const DATE = /^\d{4}-\d\d-\d\d$/;
 const txt = (v, n) => String(v ?? '').replace(/\s+/g, ' ').trim().slice(0, n);
 const d = (v) => DATE.test(String(v || '')) ? String(v) : '';
@@ -36,7 +40,7 @@ export function credState(c, now = new Date()) {
   return { state: n < 0 ? 'expired' : n <= 60 ? 'soon' : 'ok', days: n };
 }
 /** Credentials expiring within `within` days (or already expired up to 90 days ago), soonest first. */
-export function dueSoon(s, now = new Date(), within = 60) {
+export function dueSoon(s, now = new Date(), within = WARN_DAYS) {
   return credList(s).map(c => ({ ...c, ...credState(c, now) })).filter(c => c.days !== null && c.days <= within && c.days >= -90).sort((a, b) => a.days - b.days);
 }
 

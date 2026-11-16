@@ -55,7 +55,7 @@ console.log('the Claude inbox and the contact cards');
 await A.p.click('nav.tabs button[data-view=today]'); await sleep(300);
 const today = await A.p.locator('#view-today').innerText();
 check(/Proposals/.test(today) && /Shift swap on 2026-11-21|Bo takes/.test(today), 'the swap proposal waits on Today');
-await A.p.click('.inbox-card button:has-text("Apply swap")'); await sleep(400);
+await A.p.click('.inbox-card button:has-text("Apply swap")'); await sleep(400); if (await A.p.locator(".sheet button:has-text(\"Apply swap\")").count()) { check(/before|after|D1|Bo/i.test(await A.p.locator(".sheet").innerText()), "the swap is shown before it is applied"); await A.p.click(".sheet button:has-text(\"Apply swap\")"); await sleep(400); }
 await sync(A.p);
 s = await state(A.p); check(s.swaps['2026-11-21']?.with === 'Dr Bo Bright' && s.inboxLog['claude:sw-21'], 'applied as a correction and remembered');
 await A.p.click('nav.tabs button[data-view=team]'); await sleep(300); await A.p.click('#view-team .dir-item:has-text("Ann Able")'); await sleep(400);

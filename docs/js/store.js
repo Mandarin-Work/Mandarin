@@ -233,9 +233,63 @@ export function subscribe(fn) { listeners.add(fn); return () => listeners.delete
 let syncHook = null;
 export function onRemoteSync(fn) { syncHook = fn; }
 
+// ════════════════════════════════════════ one clock for every edit time
+/** The highest edit time or tombstone this device has seen (its own and every merged copy). */
+const seenCache = new WeakMap();
+export function highestSeen(s) {
+  if (!isObj(s)) return 0; if (seenCache.has(s)) return seenCache.get(s);
+  let hi = num(s.updatedAt, 0);
+  for (const coll of Object.keys(RECORD_MAPS)) for (const v of Object.values(s[coll] || {})) if (isObj(v)) hi = Math.max(hi, num(v.at, 0), num(v.at2, 0));
+  for (const t of Object.values(s.deleted || {})) hi = Math.max(hi, num(t, 0));
+  for (const t of Object.values(s.stamps || {})) hi = Math.max(hi, num(t, 0));
+  seenCache.set(s, hi); return hi;
+}
+/** A hybrid clock: real time, but never earlier than anything already seen, so a device whose clock is behind still writes
+ *  the newest edit (beta T5-04: a phone 10 min behind lost its own later edit and its deletes came back). */
+export function clock(s = state) { return Math.max(Date.now(), highestSeen(s) + 1); }
+// Every record or tombstone that a change wrote gets an edit time past everything seen, whoever wrote the `at`.
+function clockChanges(prev, next) {
+  if (!prev || !next) return;
+  const hi = highestSeen(prev); if (Date.now() > hi) return;   // the real clock is already ahead: nothing to fix
+  const t = hi + 1;
+  for (const coll of Object.keys(RECORD_MAPS)) {
+    const a = prev[coll] || {}, b = next[coll]; if (!b || a === b) continue;
+    let m = null;
+    for (const [k, v] of Object.entries(b)) if (isObj(v) && v !== a[k] && num(v.at, 0) <= hi) (m ||= { ...b })[k] = { ...v, at: t, ...(v.at2 ? { at2: t } : {}) };
+    if (m) next[coll] = m;
+  }
+  if (next.deleted && next.deleted !== prev.deleted) {
+    let d = null; const pd = prev.deleted || {};
+    for (const [k, v] of Object.entries(next.deleted)) if (v !== pd[k] && num(v, 0) <= hi) (d ||= { ...next.deleted })[k] = t;
+    if (d) next.deleted = d;
+  }
+}
+/** For a Replace or an Undo: the result must hold on every device, not only here. Whatever `prev` had that `next` lacks gets a
+ *  tombstone, whatever differs gets a fresh edit time (beta T5-02/03: rolled-back items came back at the next sync). */
+function exactChanges(prev, next, t) {
+  const deleted = { ...(next.deleted || {}) };
+  for (const [coll, pre] of [...Object.entries(RECORD_MAPS), ['rotas', 'rota']]) {
+    const a = prev?.[coll] || {}, b = { ...(next[coll] || {}) };
+    for (const k of Object.keys(a)) if (!(k in b)) deleted[`${pre}:${k}`] = t;
+    for (const [k, v] of Object.entries(b)) {
+      if (same(v, a[k])) continue;
+      delete deleted[`${pre}:${k}`];
+      if (coll === 'rotas') b[k] = { ...v, importedAt: new Date(t).toISOString() };
+      else if (isObj(v)) b[k] = { ...v, at: t, ...(v.at2 ? { at2: t } : {}) };
+    }
+    next[coll] = b;
+  }
+  next.deleted = deleted;
+}
+/** After a recovery from a damaged copy, the next sync must merge with Drive whatever the edit times say (beta T5-01). */
+let mergePending = false;
+export function needsMerge() { return mergePending; }
+export function merged() { mergePending = false; }
+
 export function update(mutator, { silent = false, remote = true } = {}) {
   const prev = state;
   const next = typeof mutator === 'function' ? (mutator(state) || state) : { ...state, ...mutator };
+  if (remote && next !== prev) clockChanges(prev, next);
   // edit time only moves forward: a device whose clock is behind another's must still make its copy newer, or the other
   // device would read "same updatedAt, nothing new" and skip the change (found with two devices, 16/11/2026)
   if (remote) { next.updatedAt = Math.max(Date.now(), (prev?.updatedAt || 0) + 1); stampChanges(prev, next, next.updatedAt); }   // local-only bookkeeping (sync time, app cache, outbox) must not make this copy look newer
@@ -249,9 +303,10 @@ export function update(mutator, { silent = false, remote = true } = {}) {
 let beforeReplace = null;
 /** Replace the whole state (a merge from Drive, a restored backup). The incoming copy is sanitized first, so a malformed file
  *  cannot blank the app. `bump`: this is the user's own choice (a restore): it becomes the newest copy and is pushed to the others. */
-export function replaceState(s, { bump = false } = {}) {
+export function replaceState(s, { bump = false, exact = null } = {}) {
   const prev = state;
   const next = complete(sanitize(s));
+  if (exact) exactChanges(exact, next, clock(mergeAll(prev, exact)));
   if (bump) { beforeReplace = prev; next.updatedAt = Math.max(Date.now(), (prev?.updatedAt || 0) + 1, (next.updatedAt || 0) + 1); next.stamps = { ...(next.stamps || {}) }; stampChanges(prev, next, next.updatedAt); }
   state = next;
   if (bump && syncHook) syncHook(state);
@@ -259,14 +314,25 @@ export function replaceState(s, { bump = false } = {}) {
   for (const fn of listeners) fn(state);
 }
 /** Undo the last restore (the copy from just before it), or false when there is nothing to undo. */
-export function undoReplace() { if (!beforeReplace) return false; const b = beforeReplace; beforeReplace = null; replaceState(b, { bump: true }); beforeReplace = null; return true; }
+export function undoReplace() { if (!beforeReplace) return false; const b = beforeReplace; beforeReplace = null; replaceState(b, { bump: true, exact: state }); beforeReplace = null; return true; }
 
 export function exportJSON() { return JSON.stringify(state, null, 2); }
 
 export function newId(prefix = '') { return prefix + uid(); }
 
+/** Undo for one record: put back `prev` (or remove the record when it did not exist before), so that the result survives a
+ *  merge on every device. A restored record gets a fresh edit time and loses its tombstone; a removed one gets a tombstone.
+ *  (An Undo that only put the old record back was deleted again by the next sync: beta T4-01.) */
+export function revert(s, coll, prefix, key, prev) {
+  const m = { ...(s[coll] || {}) }, deleted = { ...(s.deleted || {}) }, now = clock(s);
+  if (prev === undefined || prev === null) { delete m[key]; deleted[`${prefix}:${key}`] = now; }
+  else { m[key] = { ...prev, at: now }; delete deleted[`${prefix}:${key}`]; }
+  return { ...s, [coll]: m, deleted };
+}
+
 // Mark something deleted so a merge with an older copy does not bring it back
-export function tombstone(s, key) { return { ...(s.deleted || {}), [key]: Date.now() }; }
+export function tombstone(s, key) { return { ...(s.deleted || {}), [key]: clock(s) }; }
+const mergeAll = (a, b) => ({ updatedAt: Math.max(highestSeen(a), highestSeen(b)) });
 
 // ════════════════════════════════════════ edit times for values without their own `at`
 // Rules, settings and me are plain values: their edit times are kept in `stamps`, written here
@@ -361,6 +427,7 @@ function alerts() {
   import('./store-alerts.js').then(m => m.showStoreAlerts({ recovery: () => recovery, persistence, corruptCopy, dismissRecovery, exportJSON })).catch(() => {});
 }
 state = load();
+if (recovery) mergePending = true;
 if (recovery?.kept) persist();                 // write the repaired copy (the damaged one is kept under its own key)
 if (recovery) { if (typeof document !== 'undefined') { if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', alerts, { once: true }); else setTimeout(alerts, 0); } }
 if (!lsOk) { persistence.ok = false; persistence.lastError = 'This browser blocks saving on this device'; }

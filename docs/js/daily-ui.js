@@ -34,6 +34,8 @@ function windCard(now, onShift) {
   const head = h('div', { class: 'row' }, h('div', { class: 'title grow' }, 'Tonight'), h('button', { class: 'btn sm ghost', 'aria-label': 'Sleep settings', onClick: sleepSheet }, '⚙'));
   // on shift: one quiet line instead of sleep advice you can't follow yet
   if (onShift) return h('div', { class: 'card wind' }, head, h('div', { class: 'small muted' }, `On shift until ${hm(onShift.getHours() * 60 + onShift.getMinutes())}. Your sleep plan shows when it ends.`));
+  if (w.before) return h('div', { class: 'card wind' }, head, h('div', { class: 'small' }, `Tonight: ${w.label}`), w.notes.map(n => h('div', { class: 'tiny dim wind-note' }, n)));
+  if (w.nightEve) return h('div', { class: 'card wind' }, head, h('div', { class: 'small' }, `${w.dayWord}: ${w.label}`), h('div', { class: 'cr-key soon wind-key' }, h('div', { class: 'grow' }, h('b', {}, 'Sleep as usual tonight'), h('div', { class: 'tiny dim' }, `Tomorrow: nap ${hm(w.napStart)}–${hm(w.napEnd)}, up at ${hm(w.wake)} for ${hm(w.start)}`))));
   const plan = !w.work ? h('div', { class: 'small' }, `${w.dayWord}: ${w.label}`)
     : [h('div', { class: 'small' }, `${w.dayWord}: ${w.label}`),
       h('div', { class: `cr-key soon wind-key ${w.sleepNow ? 'now' : ''}` }, h('div', { class: 'grow' },

@@ -455,14 +455,25 @@ export function seenStateRev() { return seenState?.rev || ''; }
 // ── daily backups of state.json: hub/mandarin/backups/state-YYYY-MM-DD.json, the newest 14 kept
 export async function backupDaily(root, state, dayKey) {
   const dir = await ensurePath(P(root).backups);
-  const name = `state-${dayKey}.json`;
-  if (ids[`backup:${name}`]) return false;
+  const name = `state-${dayKey}.json`, size = JSON.stringify(state).length;
+  // today's copy is taken again when the data has grown a lot since (the first sync of day one was an empty 717 B: beta T5-07)
+  const had = +ids[`backup:${name}`] || 0;
+  if (had && (had === 1 || size < had * 1.5 + 4000)) return false;
   const existing = await list(dir, { extra: "name contains 'state-'" });
-  if (!existing.some(f => f.name === name)) await putJson(dir, name, state);
-  ids[`backup:${name}`] = '1'; persistIds();
+  const same = existing.find(f => f.name === name);
+  if (same && !had) { ids[`backup:${name}`] = String(+same.size || 1); persistIds(); return backupDaily(root, state, dayKey); }
+  if (same) await trash(same.id).catch(() => {});
+  await putJson(dir, name, state);
+  ids[`backup:${name}`] = String(size); persistIds();
   const old = existing.filter(f => f.name !== name).sort((a, b) => b.name.localeCompare(a.name)).slice(13);
   for (const f of old) trash(f.id).catch(() => {});
   return true;
+}
+/** A copy kept just before a risky step (migration, restore, replace): hub/mandarin/backups/state-YYYY-MM-DD-before-<what>.json. */
+export async function backupBefore(root, state, what) {
+  const dir = await ensurePath(P(root).backups);
+  const d = new Date(), p2 = (n) => String(n).padStart(2, '0');
+  await putJson(dir, `state-${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}-before-${what}-${p2(d.getHours())}${p2(d.getMinutes())}.json`, state);
 }
 export async function listBackups(root) {
   const dir = await ensurePath(P(root).backups, { create: false }); if (!dir) return [];

@@ -19,6 +19,6 @@ await t('a working day with no hours in the legend (Riyadh Season) is work, neve
 await t('wind-down: sleep time = shift start − getting-ready time − sleep target; days off need no alarm', () => {
   const w = D.windDown(s0, new Date(2026, 10, 9, 21)); assert.ok(w.work && w.night, 'the 10th is a night shift'); assert.equal(w.wake, 20 * 60 - 90); assert.equal(w.bed, 20 * 60 - 90 - 8 * 60); const e = D.windDown(s0, new Date(2026, 10, 13, 21)); assert.ok(e.work && !e.night); assert.equal(e.wake, 8 * 60 - 90); assert.equal(e.bed, 1350); assert.ok(e.bedPrevDay, 'asleep before midnight is the evening before');
   const off = D.windDown(s0, new Date(2026, 10, 4, 21)); assert.ok(!off.work); assert.match(off.label, /no alarm/);
-  const n = D.windDown({ ...s0, settings: { day: { sleepH: 7, prepMin: 60 } } }, new Date(2026, 10, 2, 21)); assert.ok(n.night); assert.equal(n.wake, 20 * 60 - 60); assert.match(n.notes.join(), /Night shift/);
+  const n = D.windDown({ ...s0, settings: { day: { sleepH: 7, prepMin: 60 } } }, new Date(2026, 10, 2, 21)); assert.ok(n.night); assert.equal(n.wake, 20 * 60 - 60); assert.match(n.notes.join(), /nap about/); const b = D.windDown(s0, new Date(2026, 10, 10, 19)); assert.ok(b.before && b.dayWord === 'Tonight', 'an hour before tonight\'s night it plans tonight');
 });
 if (fails) { console.log(`${fails} FAILED`); process.exit(1); }

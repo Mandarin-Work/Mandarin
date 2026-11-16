@@ -7,8 +7,8 @@ import { interpretCode } from './rota-parser.js';
 
 const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 export const TAKE = ['rotas', 'swaps', 'posts', 'rotaChanges', 'jobs', 'offers'];
-const TOMB = /^(rota|drive|swap|post|rchg|job|offer|slog):/;
-const SETTINGS = ['nurseStaffing', 'nurseLeads', 'labor', 'day', 'alarmShift', 'calendarIds', 'clientId', 'driveFolder'];
+const TOMB = /^(rota|drive|swap|post|rchg|job|offer):/;   // not slog: in Citrus that is the study log (beta T5-20)
+const SETTINGS = ['nurseStaffing', 'nurseLeads', 'labor', 'day', 'alarmShift', 'calendarIds'];   // never driveFolder or clientId: an old Citrus value made a second tree outside My Apps (beta T5-05)
 const RULES = ['sleepStart', 'sleepHours', 'wakeMin', 'postNightRecoveryUntil', 'preShiftBufferMin', 'postShiftBufferMin', 'commute'];
 const INBOX_TYPES = new Set(['posting', 'swap', 'nurse']);
 
@@ -22,7 +22,7 @@ export function workPart(citrus) {
   for (const k of SETTINGS) if (c.settings?.[k] !== undefined) { part.settings[k] = c.settings[k]; if (c.stamps?.[`set:${k}`]) part.stamps[`set:${k}`] = c.stamps[`set:${k}`]; }
   for (const k of RULES) if (c.rules?.[k] !== undefined) { part.rules[k] = c.rules[k]; if (c.stamps?.[`rule:${k}`]) part.stamps[`rule:${k}`] = c.stamps[`rule:${k}`]; }
   // proposals you already took or dismissed in Citrus (postings, swaps, nurse notes) are not offered again
-  const inbox = Object.fromEntries(Object.entries(c.inboxLog || {}).filter(([, v]) => isObj(v) && INBOX_TYPES.has(v.type)));
+  const inbox = Object.fromEntries(Object.entries(c.inboxLog || {}).filter(([k, v]) => isObj(v) && (INBOX_TYPES.has(v.type) || (v.status === 'dismissed' && /^claude:/.test(k)))));   // a proposal dismissed in Citrus must not come back here (T5-08)
   if (Object.keys(inbox).length) { part.inboxLog = inbox; counts.inboxLog = Object.keys(inbox).length; }
   // "How was today?" on a day you worked becomes that shift's rating (the mood itself stays Citrus's)
   const log = {};
@@ -52,3 +52,8 @@ export function describe(counts) {
   const W = { rotas: ['rota', 'rotas'], swaps: ['correction', 'corrections'], posts: ['nurse posting', 'nurse postings'], rotaChanges: ['schedule update', 'schedule updates'], jobs: ['job', 'jobs'], offers: ['offer', 'offers'], inboxLog: ['decided proposal', 'decided proposals'], shiftLog: ['shift rating', 'shift ratings'] };
   return Object.entries(counts).filter(([, n]) => n).map(([k, n]) => `${n} ${W[k] ? W[k][n === 1 ? 0 : 1] : k}`).join(' · ') || 'nothing work-related';
 }
+
+const CITRUS_ONLY = ['tasks', 'goals', 'plan', 'contacts', 'friends', 'memos', 'media', 'notes', 'dayLog', 'habits', 'aims', 'study', 'chores', 'birthdays'];
+/** A backup that is not Mandarin's own: anything without app:"mandarin" that holds a Citrus-only key, or has no app at all
+ *  (a lean Citrus backup with no tasks was restored as Mandarin's and pulled contacts and mood notes in: beta T5-06). */
+export function looksLikeCitrus(j) { return isObj(j) && j.app !== 'mandarin' && (!j.app || j.app === 'citrus' || CITRUS_ONLY.some(k => k in j)); }

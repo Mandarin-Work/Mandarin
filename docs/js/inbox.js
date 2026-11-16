@@ -5,6 +5,7 @@ import { normalizeStatus, refOf } from './inbound.js';
 import * as N from './nurses.js';
 import { parsePostingList } from './nurse-board.js';
 import { dayInfo } from './model.js';
+import { interpretCode } from './rota-parser.js';
 import { keyOf, fromKey } from './util.js';
 
 export const TYPES = new Set(['posting', 'swap', 'nurse']);
@@ -41,9 +42,21 @@ export function accept(s, p) {
     return { state: decided(N.setCanLead(s, N.keyOfPerson(n), item.canLead), ref, { type: 'nurse' }), name: n.name };
   }
   if (item.type === 'swap') {
+    const v = checkSwap(s, item); if (v.error) return { state: s, error: v.error };
     const swaps = { ...(s.swaps || {}), [item.date]: { code: item.code, with: item.with, note: item.note || item.title, kind: item.with ? 'swap' : 'fix', at: Date.now() } }, deleted = { ...(s.deleted || {}) }; delete deleted[`swap:${item.date}`];
     return { state: decided({ ...s, swaps, deleted }, ref, { type: 'swap' }) };
   }
   return { state: s };
+}
+/** A proposed swap must use a code your rota knows (or '' for off), on a day the rota covers: a typo never becomes a "working day" (beta T1-19).
+ *  → {error} or {before, after} (labels for the confirmation). */
+export function checkSwap(s, item) {
+  const info = dayInfo(s, fromKey(item.date)), gp = info.rotas.find(r => r.unitKind === 'gp');
+  if (!gp || !info.mine) return { error: `No GP rota with your row for ${item.date}` };
+  const code = String(item.code || '').trim(), sh = code ? interpretCode(code, gp.legend, 'gp') : null;
+  const known = !code || gp.legend[code] || Object.values(gp.legend).some(l => l.code === code) || sh.kind !== 'work' || !!sh.hours || gp.people.some(p => Object.values(p.days || {}).includes(code));
+  if (!known) return { error: `“${code}” is not a code in your ${item.date.slice(0, 7)} rota` };
+  const raw = String(info.mine.person.days[info.date.getDate()] || '');
+  return { before: raw ? interpretCode(raw, gp.legend, 'gp').label || raw : 'off', after: code ? sh.label || code : 'off', withKnown: !item.with || gp.people.some(p => p.name === item.with) };
 }
 export const dismiss = (s, ref) => ({ ...s, inboxLog: { ...(s.inboxLog || {}), [ref]: { status: 'dismissed', at: Date.now() } } });

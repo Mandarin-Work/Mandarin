@@ -136,6 +136,8 @@ const friendRank = (s, key) => s.favs?.[key] ? 2 : contactOf(key).friend ? 1 : 0
 export function workingWithMe(s, date, mine) {
   if (!mine || mine.shift.kind !== 'work' || !mine.shift.hours) return null;
   const site = siteId(mine.shift.site), rows = rowsFor(s, date);
+  // a shift with no nurse post (Admin day, HQ, SF, a project): no nurse line at all, never "every floater could be with you"
+  if (!site) return { site: '', confirmed: [], tipped: [], possible: [], likely: [], head: [], elsewhere: 0, tippedElsewhere: 0, unposted: 0, hasNurses: false, noSite: true, summary: '' };
   if (!rows.length) return { site, confirmed: [], tipped: [], possible: [], likely: [], head: [], elsewhere: 0, tippedElsewhere: 0, unposted: 0, hasNurses: false, summary: '' };
   const sup = (r) => !!groupDef(r.group).supervises;
   const cand = rows.filter(r => r.shift.hours && (sup(r) || ((isFloater(r.group) || r.pulledFrom) && (!site || r.choices.includes(site) || r.post === site))));
@@ -172,11 +174,13 @@ export function workingWithMe(s, date, mine) {
   // usual seats at your site on your shift (nights: 2 per village) — "4 candidates, 2 will be with you" instead of a bare count
   const seat = site ? seatsFor(s, mine.shift, date)?.[site] : null, seats = Number.isFinite(seat) ? Math.max(0, seat - confirmed.length - tipped.length) : null;
   if (seats != null && n) for (const p of possible) if (!p.known) { p.chance = Math.min(1, seats / n); p.base = p.chance; }
-  const summary = confirmed.length ? `${confirmed.length} posted with you${n ? ` · ${n} more could be sent` : ''}`
+  // a site the usual staffing closes on this shift (office clinics on Fridays and at night): say so, not "nobody overlaps"
+  const closed = seat === 0 && !confirmed.length && !tipped.length;
+  const summary = closed ? `${siteLabel(site)} has no nurse on ${mine.shift.type === 'N' ? 'nights' : date.getDay() === 5 ? 'Fridays (paramedic-run)' : 'this shift'}` : confirmed.length ? `${confirmed.length} posted with you${n ? ` · ${n} more could be sent` : ''}`
     : tipped.length ? `${tipped.length} heard${n ? ` · ${n} more could be sent` : ''}`
     : likely.length ? `Likely with you: ${likely.slice(0, 3).map(fn).join(', ')}${n > likely.length ? ` · ${n} could be sent` : ''}`
     : n ? `${n} candidate${n > 1 ? 's' : ''} for ${seats != null && seats < n ? `${seats} place${seats > 1 ? 's' : ''} at ${siteLabel(site)}` : 'your site'} · not posted yet` : '';
-  return { site, confirmed, tipped, possible, likely, head, elsewhere, tippedElsewhere, unposted, hasNurses: true, summary, seats };
+  return { site, confirmed, tipped, possible: closed ? [] : possible, likely: closed ? [] : likely, head, elsewhere, tippedElsewhere, unposted, hasNurses: true, closed, summary, seats };
 }
 /** Evening nudge: tomorrow's floaters not yet posted. */
 export const unpostedFor = (s, date) => staffing(s, date).unposted;
