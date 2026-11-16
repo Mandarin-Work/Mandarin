@@ -1,6 +1,17 @@
 // Career: your contracts (current + past), what they say, and a way to weigh the next offer. Pure functions, no DOM.
 import { addDays, fromKey, keyOf } from './util.js';
-const num = (v, max = 1e7) => Math.max(0, Math.min(max, +v || 0));
+// Arabic-Indic and Persian digits typed on an Arabic keyboard count as numbers (٤٥٠٠ = 4500)
+export const westernDigits = (v) => String(v ?? '').replace(/[\u0660-\u0669]/g, (d) => d.charCodeAt(0) - 0x0660).replace(/[\u06F0-\u06F9]/g, (d) => d.charCodeAt(0) - 0x06F0).replace(/\u066B/g, '.').replace(/\u066C/g, ',');
+/** What is wrong with a money amount as typed, or '' (blank is fine). */
+export function moneyError(v) {
+  const t = westernDigits(v).replace(/[, ]/g, '').trim(); if (!t) return '';
+  const n = +t; if (!Number.isFinite(n)) return 'Numbers only'; if (n < 0) return 'Not below 0'; if (n >= 1e7) return 'That is too large';
+  return '';
+}
+const num = (v, max = 1e7) => Math.max(0, Math.min(max, +westernDigits(v).replace(/[, ]/g, '') || 0));
+const MONEY = ['basic', 'housing', 'transport', 'other', 'housedValue', 'ticketValue', 'hoursWeek', 'leave', 'daysWeek', 'trialDays'];
+/** Amounts typed wrong are named, never silently turned into 0 (T4-09). */
+export const moneyProblems = (j) => MONEY.filter(k => moneyError(j[k])).map(k => `${k.replace(/([A-Z])/g, ' $1').toLowerCase()}: ${moneyError(j[k]).toLowerCase()}`);
 const dte = (v) => /^\d{4}-\d\d-\d\d$/.test(String(v || '')) ? v : '';
 const txt = (v, n = 200) => String(v || '').trim().slice(0, n);
 const r1 = (n) => Math.round(n * 10) / 10, r2 = (n) => Math.round(n * 100) / 100;
@@ -11,7 +22,7 @@ const norm = (v) => String(v || '').trim().toLowerCase().replace(/\s+/g, ' ');
 
 /** Days of written notice before the end, when the contract file or the sheet does not say. Common in Saudi contracts; the user can change it. */
 export const RENEW_NOTICE = 60;
-/** The divisor the Labor Law uses for an hourly wage: a month is 30 days × 8 hours. */
+/** The divisor the Labour Law uses for an hourly wage: a month is 30 days × 8 hours. */
 export const HOURS_PER_MONTH = 240;
 
 export const ASPECTS = [['environment', 'Work environment'], ['people', 'People'], ['food', 'Food'], ['housing', 'Living quarters']];
@@ -32,6 +43,7 @@ export function cleanJob(j) {
 export function jobErrors(j) {
   const e = [];
   if (!txt(j.employer)) e.push('Add the employer');
+  e.push(...moneyProblems(j));
   if (j.start && j.end && j.end < j.start) e.push('“Contract ends” is before “Start”');
   if (j.start && j.left && j.left < j.start) e.push('“Left on” is before “Start”');
   if (j.start && j.signed && j.signed > (j.end || '9999')) e.push('“Signed” is after the contract ends');
@@ -104,7 +116,7 @@ export const upcoming = (j, now = new Date(), within = 120) => keyDates(j, now).
 // ───────── money
 /** Art. 85 share of the award when YOU resign, by completed years. */
 export const resignFactor = (y) => y < 2 ? 0 : y < 5 ? 1 / 3 : y < 10 ? 2 / 3 : 1;
-/** End-of-service award, Labor Law Art. 84: half a month's wage for each of the first 5 years, a full month for each year after, parts of a year pro rata.
+/** End-of-service award, Labour Law Art. 84: half a month's wage for each of the first 5 years, a full month for each year after, parts of a year pro rata.
  *  It is due in full when the employer ends the contract or a fixed term runs out. Resigning (Art. 85) pays a third after 2 years, two thirds after 5, all after 10. */
 export function endOfService(j, now = new Date()) {
   const y = yearsServed(j, now), months = Math.min(y, 5) * 0.5 + Math.max(0, y - 5), t = total(j), b = num(j.basic), f = resignFactor(y);
@@ -128,7 +140,7 @@ export function realHourly(j, months) { const t = total(j), contractH = r1(num(j
 /** Things in the contract worth a second look. */
 export function flags(j, now = new Date()) {
   const out = [], y = yearsServed(j, now);
-  if (j.leave && j.leave < 21) out.push({ level: 'violation', msg: `Annual leave ${j.leave} days is below the legal minimum of 21 (Labor Law Art. 109)` });
+  if (j.leave && j.leave < 21) out.push({ level: 'violation', msg: `Annual leave ${j.leave} days is below the legal minimum of 21 (Labour Law Art. 109)` });
   else if (j.leave && j.leave < 30 && y >= 5 && j.status === 'current') out.push({ level: 'violation', msg: `After 5 years of service annual leave is at least 30 days, the contract gives ${j.leave} (Art. 109)` });
   if (j.hoursWeek > 48) out.push({ level: 'violation', msg: `${j.hoursWeek}h a week is over the 48h limit (Art. 98)` });
   if (j.trialDays > 180) out.push({ level: 'violation', msg: `A ${j.trialDays}-day trial period is over the 180-day maximum (Art. 53)` });
@@ -212,7 +224,7 @@ export function importCareer(s, d) {
 /** "2 jobs, 1 offer, labor settings" (added / updated). */
 export function importSummary(c) {
   const pl = (x, w) => `${x} ${w}${x === 1 ? '' : 's'}`, part = (a, u, w) => a + u ? `${pl(a + u, w)}${u ? ` (${u} updated)` : ''}` : '';
-  return [part(c.jobsAdded, c.jobsUpdated, 'job'), part(c.offersAdded, c.offersUpdated, 'offer'), c.labor ? 'labor settings' : ''].filter(Boolean).join(', ');
+  return [part(c.jobsAdded, c.jobsUpdated, 'job'), part(c.offersAdded, c.offersUpdated, 'offer'), c.labor ? 'labour settings' : ''].filter(Boolean).join(', ');
 }
 /** What the export writes; import reads the same shape back. */
 export const exportData = (s) => ({ jobs: jobList(s), offers: offerList(s), labor: s.settings?.labor || {} });

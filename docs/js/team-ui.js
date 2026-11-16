@@ -13,7 +13,7 @@ const bare = (n) => String(n || '').replace(/^Dr\.?\s*/i, '');
 
 export function renderTeam({ compact = false } = {}) {
   if (compact) { const c = withCard(true); return c ? [c] : []; }
-  const seg = h('div', { class: 'seg view-mode', role: 'tablist' }, [['people', 'Everyone'], ['with', 'Who I work with']].map(([k, l]) => h('button', { class: part === k ? 'active' : '', role: 'tab', 'aria-selected': part === k ? 'true' : 'false', onClick: () => { part = k; ctx.render(); } }, l)));
+  const seg = h('div', { class: 'seg view-mode', role: 'group' }, [['people', 'Everyone'], ['with', 'Who I work with']].map(([k, l]) => h('button', { class: part === k ? 'active' : '', 'aria-pressed': part === k ? 'true' : 'false', onClick: () => { part = k; ctx.render(); } }, l)));
   return [h('h1', {}, 'Team'), seg, ...[part === 'with' ? withView() : PU.renderDirectory()].flat()];
 }
 function personByKey(key) { return allPeople(S()).find(p => p.key === key); }
@@ -34,7 +34,7 @@ function withCard(compact) {
 }
 function withView() {
   const s = S();
-  if (!s.me) return h('div', { class: 'card' }, h('div', { class: 'empty' }, 'Pick your row in Settings › Me first.'));
+  if (!s.me) return h('div', { class: 'card' }, h('div', { class: 'empty' }, ...(Object.keys(s.rotas || {}).length ? ['Pick your row in Settings › Me first. ', h('button', { class: 'btn sm', onClick: () => ctx.go('more') }, 'Open Settings')] : ['Import your rota first. ', h('button', { class: 'btn sm', onClick: () => ctx.go('calendar') }, 'Go to Calendar')])));
   const card = withCard(false); if (!card) return h('div', { class: 'card' }, h('div', { class: 'empty' }, 'Import the GP rota to see who you work with.'), h('div', { class: 'row', style: { justifyContent: 'center' } }, ctx.importButton('Import rota files')));
   const coming = T.favShifts(s, new Date(), 28);
   return [h('div', { class: 'cols' }, h('div', {}, card), h('div', {}, coming.length ? h('div', { class: 'card' }, h('div', { class: 'title' }, '⭐ Coming shifts with your favourites'), h('div', { class: 'list' }, coming.map(d => h('button', { class: 'item clickable', onClick: () => ctx.openDay(d.date) }, h('div', { class: 'grow' }, h('div', { class: 'name' }, `${relDay(d.date)} · ${d.code}`), h('div', { class: 'meta' }, d.favs.map(p => bare(p.name).split(' ')[0]).join(', '))), h('span', { class: 'chip' }, d.site.replace(/ office clinic.*/i, ' clinic')))))) : null))];

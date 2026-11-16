@@ -1,4 +1,4 @@
-// Saudi Labor Law checks on MY rota (Royal Decree M/51 as amended by M/44, in force 19 Feb 2025). Pure functions, no DOM.
+// Saudi Labour Law checks on MY rota (Royal Decree M/51 as amended by M/44, in force 19 Feb 2025). Pure functions, no DOM.
 // Not legal advice: the contract, the employer's policy or a government/civil-service post may differ, so everything is a flag to check, not a verdict.
 import { addDays, startOfDay, keyOf, fromKey, MONTHS } from './util.js';
 import { dayInfo, shiftWindow } from './model.js';

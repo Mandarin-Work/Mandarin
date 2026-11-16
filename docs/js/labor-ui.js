@@ -1,4 +1,4 @@
-// Work → Calendar: "Labor law check" card + details/settings sheet. Flags only — contracts and employer policy can differ from the statute.
+// Work → Calendar: "Labour law check" card + details/settings sheet. Flags only — contracts and employer policy can differ from the statute.
 import { h, toast, fromKey, MONTHS } from './util.js';
 import * as L from './labor.js';
 let ctx = null;
@@ -20,7 +20,7 @@ function cleanLabor(st, labor) {
 const sameJSON = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
 export function laborCard(y, mo) {
-  const s = ctx.S(); if (!s.me) return null; const cfg = L.settings(s); if (!cfg.on) return h('div', { class: 'card lw' }, h('div', { class: 'row' }, h('div', { class: 'title grow' }, 'Labor law check · off'), h('button', { class: 'btn sm ghost', onClick: () => sheet(y, mo) }, 'Settings')));
+  const s = ctx.S(); if (!s.me) return null; const cfg = L.settings(s); if (!cfg.on) return h('div', { class: 'card lw' }, h('div', { class: 'row' }, h('div', { class: 'title grow' }, 'Labour law check · off'), h('button', { class: 'btn sm ghost', onClick: () => sheet(y, mo) }, 'Settings')));
   const r = L.checkMonth(s, y, mo, cfg), flags = r.findings.filter(f => f.level !== 'info'), t = r.totals, leave = L.leaveStatus(s, new Date(), cfg);
   const [word, cls] = LV[r.level];
   const stats = [
@@ -30,7 +30,7 @@ export function laborCard(y, mo) {
     leave ? [`${leave.used}/${leave.entitled}`, `leave in rotas (${leave.seenMonths} mo)`, `Leave days in the rotas loaded for this leave year (from ${fmtD(leave.yearStart)}). Months without a rota are not counted.`] : null,
   ].filter(Boolean);
   return h('div', { class: 'card lw' },
-    h('div', { class: 'row' }, h('div', { class: 'title grow' }, 'Saudi labor law check'), h('span', { class: `chip lw-${cls}` }, flags.length ? `${flags.length} to check` : 'All clear')),
+    h('div', { class: 'row' }, h('div', { class: 'title grow' }, 'Saudi labour law check'), h('span', { class: `chip lw-${cls}` }, flags.length ? `${flags.length} to check` : 'All clear')),
     h('div', { class: 'lw-stats' }, stats.map(([n, l, tip]) => h('div', { title: tip }, h('b', {}, n), h('small', {}, l)))),
     flags.slice(0, 3).map(flagRow),
     flags.length > 3 ? h('div', { class: 'tiny dim' }, `+${flags.length - 3} more`) : null,
@@ -38,7 +38,7 @@ export function laborCard(y, mo) {
 }
 
 function sheet(y, mo) {
-  const wrap = h('div', {}), repaint = () => setTimeout(() => paint(), 0); ctx.sheet([wrap]);
+  const wrap = h('div', {}), repaint = () => setTimeout(() => paint(), 0); { const { box } = ctx.sheet([wrap]); box.removeAttribute('aria-labelledby'); box.setAttribute('aria-label', `Labour law check, ${y}-${mo}`); }
   // write only what the user changed, on top of the stored hand settings — never the values derived from the contract (beta T05-01)
   const save = (patch) => ctx.update(st => { const labor = cleanLabor(st, { ...(st.settings?.labor || {}), ...patch }); return { ...st, settings: { ...st.settings, labor } }; });
   // heal older saves that froze the contract's wage/leave/hours into settings while they still equal the contract
@@ -62,8 +62,8 @@ function sheet(y, mo) {
     const legalNote = cfg.contractH > L.LAW.weeklyH ? h('div', { class: 'lw-flag bad' }, h('b', {}, 'Art. 98'), ` ${cfg.contractH}h a week is over the ${L.LAW.weeklyH}h legal limit, so weeks are checked against ${L.LAW.weeklyH}h.`) : null;
     const weekCell = (w) => L.weekLabel(fromKey(w.start)) + (w.full ? '' : ' *');
     const info = r.findings.filter(f => f.level === 'info'), real = r.findings.filter(f => f.level !== 'info');
-    b.append(h('h2', {}, `${MONTHS[mo - 1]} ${y} · labor law`),
-      h('div', { class: 'small muted' }, 'Saudi Labor Law (Royal Decree M/51, amended by M/44 and in force from 19 Feb 2025). These are flags to check against your contract and your employer’s policy, not a legal ruling.'),
+    b.append(h('h2', {}, `${MONTHS[mo - 1]} ${y} · labour law`),
+      h('div', { class: 'small muted' }, 'Saudi Labour Law (Royal Decree M/51, amended by M/44 and in force from 19 Feb 2025). These are flags to check against your contract and your employer’s policy, not a legal ruling.'),
       h('div', { class: 'card' }, h('div', { class: 'title' }, 'Weeks (Sun–Sat)'),
         h('table', { class: 'lw-weeks' }, h('tr', {}, ['Week', 'Hours', 'Limit', 'Over', 'Rest'].map(x => h('th', {}, x))),
           ...r.weeks.map(w => h('tr', { class: w.full ? '' : 'part' }, h('td', { class: 'lw-wk' }, weekCell(w)), h('td', {}, w.hours), h('td', { title: w.cap < w.legal ? `Contract ${w.cap}h, legal ${w.legal}h` : 'Legal limit' }, w.cap < w.legal ? `${w.cap}/${w.legal}` : w.cap, w.ram ? ' R' : ''),

@@ -22,13 +22,13 @@ export function renderMonth() {
     h('button', { class: 'btn icon', 'aria-label': 'Previous month', onClick: () => { month = new Date(y, mo - 2, 1); ctx.render(); } }, '‹'),
     h('h2', { class: 'grow', style: { textAlign: 'center', fontSize: '20px', margin: 0 } }, `${MONTHS[mo - 1]} ${y}`),
     h('button', { class: 'btn icon', 'aria-label': 'Next month', onClick: () => { month = new Date(y, mo, 1); ctx.render(); } }, '›'));
-  const seg = h('div', { class: 'seg view-mode', role: 'tablist' }, [['overview', 'Overview'], ['swaps', 'Swaps & covers'], ['log', 'Shift log']].map(([k, l]) => h('button', { class: part === k ? 'active' : '', role: 'tab', 'aria-selected': part === k ? 'true' : 'false', onClick: () => { part = k; ctx.render(); } }, l)));
+  const seg = h('div', { class: 'seg view-mode', role: 'group' }, [['overview', 'Overview'], ['swaps', 'Swaps & covers'], ['log', 'Shift log']].map(([k, l]) => h('button', { class: part === k ? 'active' : '', 'aria-pressed': part === k ? 'true' : 'false', onClick: () => { part = k; ctx.render(); } }, l)));
   const body = part === 'swaps' ? swaps(s, y, mo) : part === 'log' ? log(s, y, mo) : overview(s, y, mo);
   return [h('h1', {}, 'Month'), head, seg, ...[body].flat()];
 }
 
 function overview(s, y, mo) {
-  if (!s.me) return h('div', { class: 'card' }, h('div', { class: 'empty' }, 'Pick your row in Settings › Me to see your month.'));
+  if (!s.me) return h('div', { class: 'card' }, h('div', { class: 'empty' }, ...(Object.keys(s.rotas || {}).length ? ['Pick your row in Settings › Me first. ', h('button', { class: 'btn sm', onClick: () => ctx.go('more') }, 'Open Settings')] : ['Import your rota first. ', h('button', { class: 'btn sm', onClick: () => ctx.go('calendar') }, 'Go to Calendar')])));
   const loaded = Object.values(s.rotas).some(r => r.year === y && r.month === mo && r.unitKind === 'gp');
   const left = [], right = [];
   if (!loaded) left.push(h('div', { class: 'card' }, h('div', { class: 'small muted' }, `No GP rota for ${MONTHS[mo - 1]} ${y} yet. Leave you plan still shows here once the rota arrives.`)));

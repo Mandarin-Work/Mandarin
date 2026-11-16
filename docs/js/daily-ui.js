@@ -16,7 +16,8 @@ export function todayCards(now = new Date()) {
   const b = D.briefing(s, now); if (b.length) out.push({ el: briefCard(b, hr >= D.NIGHT_ENDS && hr < 14, now), score: hr < D.NIGHT_ENDS ? 30 : hr < 12 ? 95 : hr < 18 ? 60 : 35, label: hr < 5 ? 'Overnight' : 'Briefing' });
   // Tonight is for the evening and the small hours, and steps back while a shift is running: you can't act on it then (beta T01-11)
   if (hr >= 18 || hr < D.NIGHT_ENDS) { const w = windCard(now, onShift); if (w) out.push({ el: w, score: onShift ? 28 : 90, label: 'Tonight' }); }
-  const ask = SL.askNow(s, now); if (ask) out.push({ el: logCard(ask), score: now - ask.end < 3 * 3600000 ? 97 : 75, label: 'Shift log' });
+  // a shift rated from the card keeps its row for this session, so a mis-tap can be changed (T1-07)
+  const ask = SL.askNow(s, now) || [...ratedHere].map(k => lastAsk.get(k)).filter(Boolean).pop(); if (ask) out.push({ el: logCard(ask), score: now - ask.end < 3 * 3600000 ? 97 : 75, label: 'Shift log' });
   const tt = T.tomorrowTeam(s, now); if (tt) out.push({ el: teamCard(tt), score: tt.tonight ? 85 : 88, label: 'Tomorrow’s team' });
   return out.filter(x => x.el);
 }
@@ -58,13 +59,15 @@ function sleepSheet() {
 
 // ───────── after-shift log: one tap for how it went, optional counts and a note
 // Shifts rated from a card in this session keep their row, so a mis-tap can be changed (the old day rating's rule, beta T01-13).
-const ratedHere = new Set();
+const ratedHere = new Set(), lastAsk = new Map();
 export function faces(key, onDone) {
   const cur = SL.logOf(S(), key)?.rating || 0;
-  return h('div', { class: 'rate-faces', role: 'group', 'aria-label': 'How was the shift?' }, SL.FACES.map((f, i) => h('button', { type: 'button', class: `rate-f ${cur === i + 1 ? 'sel' : ''}`, 'aria-label': `${i + 1} of 5`, 'aria-pressed': cur === i + 1 ? 'true' : 'false',
-    onClick: () => { const before = SL.logOf(S(), key); ratedHere.add(key); ctx.update(x => SL.logShift(x, key, { rating: i + 1 })); toast(cur ? `Changed to ${f}` : `Saved ${f}`, 'ok', { action: { label: 'Undo', run: () => ctx.update(x => before ? { ...x, shiftLog: { ...x.shiftLog, [key]: before } } : SL.clearLog(x, key)) } }); onDone?.(); } }, f)));
+  const group = h('div', { class: 'rate-faces', role: 'group', 'aria-label': 'How was the shift?' }, SL.FACES.map((f, i) => h('button', { type: 'button', class: `rate-f ${cur === i + 1 ? 'sel' : ''}`, 'aria-label': `${i + 1} of 5`, 'aria-pressed': cur === i + 1 ? 'true' : 'false',
+    onClick: () => { const before = SL.logOf(S(), key); ratedHere.add(key); ctx.update(x => SL.logShift(x, key, { rating: i + 1 })); group.replaceWith(faces(key, onDone)); toast(cur ? `Changed to ${f}` : `Saved ${f}`, 'ok', { action: { label: 'Undo', run: () => ctx.update(x => before ? { ...x, shiftLog: { ...x.shiftLog, [key]: before } } : SL.clearLog(x, key)) } }); onDone?.(); } }, f)));
+  return group;
 }
 function logCard(ask) {
+  lastAsk.set(ask.key, ask);
   const e = ask.entry, label = `${e.code} · ${e.shift.label}`;
   return h('div', { class: 'card slog-card' }, h('div', { class: 'row' }, h('div', { class: 'title grow' }, 'How was the shift?'), h('span', { class: 'tiny dim' }, `${fd(ask.key)} · ${label}`)),
     faces(ask.key), h('div', { class: 'row', style: { marginTop: '6px' } }, h('button', { class: 'btn sm ghost', onClick: () => logSheet(ask.key) }, '＋ Counts and a note'), h('span', { class: 'tiny dim grow', style: { textAlign: 'right' } }, 'Counts only, never patient details')));
@@ -81,7 +84,9 @@ export function logSheet(key) {
     h('div', { class: 'field' }, h('label', {}, 'How was it?'), faces(key)),
     h('div', { class: 'grid3' }, ...SL.COUNTS.map(([k, l]) => num(k, l))),
     field('Note', note), err,
-    h('div', { class: 'row wrap sh-foot' }, h('button', { class: 'btn primary grow', onClick: () => { const c = SL.checkNote(v.note); if (!c.ok) { err.textContent = c.msg; note.focus(); return; } ctx.update(x => SL.logShift(x, key, { note: v.note ?? '', seen: v.seen, transfers: v.transfers, referrals: v.referrals })); box.close(); toast('Shift log saved', 'ok'); } }, 'Save'),
+    h('div', { class: 'row wrap sh-foot' }, h('button', { class: 'btn primary grow', onClick: () => { const c = SL.checkNote(v.note); if (!c.ok) { err.textContent = c.msg; note.focus(); return; }
+      // counts are whole numbers 0–300: a bad one is named, never quietly changed (T1-09)
+      const badCount = SL.COUNTS.find(([k]) => v[k] !== undefined && String(v[k]).trim() !== '' && !(/^\d+$/.test(String(v[k]).trim()) && +v[k] <= SL.MAX_COUNT)); if (badCount) { err.textContent = `${badCount[1]}: a whole number from 0 to ${SL.MAX_COUNT}`; return; } ctx.update(x => SL.logShift(x, key, { note: v.note ?? '', seen: v.seen, transfers: v.transfers, referrals: v.referrals })); box.close(); toast('Shift log saved', 'ok'); } }, 'Save'),
       cur.at ? h('button', { class: 'btn ghost danger', onClick: () => { ctx.update(x => SL.clearLog(x, key)); box.close(); toast('Log removed', 'ok', { action: { label: 'Undo', run: () => ctx.update(x => ({ ...x, shiftLog: { ...x.shiftLog, [key]: cur } })) } }); } }, 'Remove') : null)]);
 }
 

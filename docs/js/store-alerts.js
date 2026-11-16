@@ -39,7 +39,7 @@ export function showStoreAlerts({ recovery, persistence, corruptCopy, dismissRec
         ? `${from} ${rec.kept ? 'The damaged copy is kept on this device. ' : ''}If you use Google sync, your Drive copy merges back in on the next sync; daily backups are in Settings › Drive.`
         : `Some saved records were unreadable and were left out, so the rest of the app keeps working${rec.kept ? '. The original copy is kept on this device' : ''}.`,
       actions: [
-        ...(rec.kept ? [['Download damaged copy', () => { const t = corruptCopy(); if (t) download(t, `citrus-damaged-${new Date(rec.at).toISOString().slice(0, 10)}.json`); }]] : []),
+        ...(rec.kept ? [['Download damaged copy', () => { const t = corruptCopy(); if (t) download(t, `mandarin-damaged-${new Date(rec.at).toISOString().slice(0, 10)}.json`); }]] : []),
         ...(damaged ? [['Drive backups', openSettings, true]] : []),
       ],
       onClose: () => { if (!damaged) dismissRecovery(); },

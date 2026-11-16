@@ -34,13 +34,17 @@ ${sec('Education', ul(lines(c.education)))}${sec('Continuing medical education',
 }
 
 const norm = (t) => String(t || '').toLowerCase().replace(/\b(co|company|group|est|ltd|llc|holding|for|the|and|services?|contracting|trading|medical|healthcare|health care|hospital)\b/g, ' ').replace(/[^a-z؀-ۿ]+/g, ' ').trim();
-const overlap = (a, b) => { const x = new Set(norm(a).split(' ').filter(w => w.length > 2)), y = norm(b).split(' ').filter(w => w.length > 2); return y.filter(w => x.has(w)).length; };
-/** What your past jobs say about an offer: same or related employer you rated low or would not repeat, and the parts that went badly. */
+// words too common in employer names to mean "the same employer" on their own (T4-06: one shared "Saudi" or "King" was enough)
+const COMMON = new Set(['saudi', 'arabia', 'arabian', 'king', 'prince', 'princess', 'royal', 'national', 'international', 'german', 'american', 'british', 'city', 'center', 'centre', 'clinic', 'clinics', 'polyclinic', 'general', 'specialist', 'specialized', 'specialty', 'care', 'complex', 'riyadh', 'jeddah', 'dammam', 'khobar', 'makkah', 'madinah', 'eastern', 'province', 'new', 'first', 'united', 'gulf']);
+const words = (t) => norm(t).split(' ').filter(w => w.length > 2 && !COMMON.has(w));
+/** 0–1: how much of the shorter name the other one shares, counting only distinctive words. */
+const overlap = (a, b) => { if (!a || !b) return 0; if (norm(a) && norm(a) === norm(b)) return 1; const x = new Set(words(a)), y = words(b); if (!x.size || !y.length) return 0; return y.filter(w => x.has(w)).length / Math.min(x.size, new Set(y).size); };
+const sameEmployer = (j, o) => Math.max(overlap(j.employer, o.employer), overlap(j.employerAr, o.employerAr || o.employer)) >= 0.6;
 export function lessons(s, offer) {
   const out = [];
   for (const j of jobList(s)) {
     if (j.status === 'current' && !j.postingOf) continue;
-    const same = overlap(j.employer, offer.employer) + overlap(j.employerAr, offer.employer) + (j.site && offer.site ? overlap(j.site, offer.site) : 0);
+    const same = sameEmployer(j, offer);
     const bad = (j.rating && j.rating <= 2) || j.again === 'no';
     if (same && bad) out.push({ level: 'warn', text: `You worked for ${j.employer}${j.site ? ` (${j.site})` : ''}${j.again === 'no' ? ' and said you would not go back' : ''}${j.rating ? `, rated ${j.rating}/5` : ''}.` });
     else if (same) out.push({ level: 'info', text: `You know ${j.employer}${j.rating ? `: rated ${j.rating}/5` : ''}.` });
@@ -50,5 +54,6 @@ export function lessons(s, offer) {
   const lows = {}; for (const j of jobList(s)) for (const [k, l] of ASPECTS) if (j.aspects?.[k] && j.aspects[k] <= 2) lows[l] = (lows[l] || 0) + 1;
   const top = Object.entries(lows).filter(([, n]) => n >= 2).sort((a, b) => b[1] - a[1]).map(([l]) => l.toLowerCase());
   if (top.length) out.push({ level: 'info', text: `Across your past jobs the ${top.join(' and ')} went wrong more than once: check ${top.length > 1 ? 'them' : 'it'} in this offer.` });
-  return out;
+  // warnings first, each sentence once (T4-07)
+  const seen = new Set(); return out.filter(l => !seen.has(l.text) && seen.add(l.text)).sort((a, b) => (a.level === 'warn' ? 0 : 1) - (b.level === 'warn' ? 0 : 1));
 }

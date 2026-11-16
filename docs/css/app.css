@@ -1395,3 +1395,18 @@ nav.tabs button[hidden] { display: none !important; }
 .item.clickable { text-align: left; }
 button.item { width: 100%; background: none; border: 0; color: inherit; font: inherit; }
 @media (max-width: 380px) { .wk-hours .small { font-size: 12px; } .wk-hours .dim { display: none; } }
+/* card headers with a subtitle: the title keeps its width, the subtitle wraps under it on narrow screens (T1-10, T6-03) */
+.card > .row:first-child { flex-wrap: wrap; row-gap: 2px; }
+.card > .row:first-child > .title { flex: 1 0 auto; min-width: 8em; }
+.card > .row:first-child > .tiny.dim { min-width: 0; overflow-wrap: anywhere; }
+/* Paper: orange text uses the darker orange (the bright one stays for borders and fills): 5.9:1 on white (T6-04) */
+html[data-ui="paper"] .orange, html[data-ui="paper"] .cal .day.today .n { color: var(--orange2, #A24B00); }
+/* calendar past days and "+N" stay readable (T6-05) */
+.cal .day.past:not(.sel) { opacity: .75; }
+/* touch: every tap target at least 44px (T6-06) */
+@media (pointer: coarse) {
+  .btn.sm, .chip, .tm-pill, .c-chip, .seg button, summary, .linkish { min-height: 44px; }
+  .btn.icon, .sheet-x, .fav-star { min-width: 44px; min-height: 44px; }
+}
+/* wide tables in a sheet scroll sideways instead of overflowing it at 320px (T6-09) */
+.sheet table { display: block; max-width: 100%; overflow-x: auto; }

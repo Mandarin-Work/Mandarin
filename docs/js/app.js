@@ -630,7 +630,8 @@ function importButton(label = 'Import rota files') {
 // and the page behind stops scrolling. Sheets are also removed directly (`.sheet-bg` .remove()) all over the app, so the
 // bookkeeping (focus, scroll lock, history) runs from a MutationObserver instead of from close().
 const sheetOpeners = new WeakMap();
-const topSheet = () => [...document.querySelectorAll('.sheet-bg')].pop() || null;
+// the search box counts as a sheet: Back closes it and Tab stays in it (T6-02, T6-10)
+const topSheet = () => [...document.querySelectorAll('.sheet-bg, body > .search')].pop() || null;
 function sheet(content) {
   const opener = document.activeElement && document.activeElement !== document.body ? document.activeElement : null;
   const bg = h('div', { class: 'sheet-bg', onClick: (e) => { if (e.target === bg) close(); } });
@@ -658,10 +659,13 @@ function shortcutsSheet() {
   sheet([h('h2', {}, 'Keyboard shortcuts'), h('div', { class: 'kv keys' }, rows.flatMap(([k, v]) => [h('kbd', {}, k), h('span', {}, v)]))]);
 }
 // Back button closes the top sheet: one history entry guards all open sheets.
-let sheetGuard = false, sheetSelfBack = false;
+let sheetGuard = false, sheetSelfBack = false, lastSheetClose = 0;
+// the second tap of a double-tap on Save lands on whatever was under the sheet (the bottom tabs): swallow it (T4-10)
+document.addEventListener('click', (e) => { if (Date.now() - lastSheetClose < 280 && !e.target.closest?.('.sheet, .toast')) { e.preventDefault(); e.stopPropagation(); } }, true);
 function watchSheets() {
   new MutationObserver((muts) => {
-    const removed = muts.flatMap(m => [...m.removedNodes]).filter(n => n.classList?.contains('sheet-bg')), open = document.querySelectorAll('.sheet-bg').length;
+    const removed = muts.flatMap(m => [...m.removedNodes]).filter(n => n.classList?.contains('sheet-bg') || n.classList?.contains('search')), open = document.querySelectorAll('.sheet-bg, body > .search').length;
+    if (removed.length) lastSheetClose = Date.now();
     document.documentElement.classList.toggle('sheet-open', open > 0);
     for (const bg of removed) { const o = sheetOpeners.get(bg); if (o?.isConnected && !topSheet()) o.focus({ preventScroll: true }); }
     // the calendar's selected-day ring belongs to the open day sheet; it goes when the sheet does (beta T02-27)
@@ -1433,7 +1437,7 @@ function customiseCard() {
 function uiPicker() {
   const u = getUi(), opt = (id, name, note) => h('button', { class: `ui-opt ${u.ui === id ? 'sel' : ''}`, 'aria-pressed': u.ui === id ? 'true' : 'false', onClick: () => setUi({ ui: id }) }, h('span', { class: `ui-thumb ui-${id}` }, h('i'), h('i'), h('b', {}, 'Aa')), h('b', {}, name), h('small', {}, note));
   return h('div', { class: 'ui-pick' }, h('div', { class: 'title' }, 'Interface on this device'), h('div', { class: 'ui-opts' }, opt('arcade', 'Arcade', '8-bit, the family look'), opt('clean', 'Clean', 'Calm, rounded, dark'), opt('paper', 'Paper', 'Light, for daylight')),
-    h('div', { class: 'row', style: { marginTop: '10px' } }, h('span', { class: 'small grow' }, 'Text size'), h('div', { class: 'seg ui-size' }, [['small', 'S'], ['normal', 'M'], ['large', 'L']].map(([k, l]) => h('button', { class: u.size === k ? 'active' : '', 'aria-label': `Text size ${k}`, onClick: () => setUi({ size: k }) }, l)))),
+    h('div', { class: 'row', style: { marginTop: '10px' } }, h('span', { class: 'small grow' }, 'Text size'), h('div', { class: 'seg ui-size' }, [['small', 'S'], ['normal', 'M'], ['large', 'L']].map(([k, l]) => h('button', { class: u.size === k ? 'active' : '', 'aria-label': `Text size ${k}`, 'aria-pressed': String(u.size === k), onClick: () => setUi({ size: k }) }, l)))),
     h('div', { class: 'row', style: { marginTop: '8px' } }, h('span', { class: 'small grow' }, 'Wide-screen cockpit (Today, Calendar and Team side by side)'), h('input', { type: 'checkbox', 'aria-label': 'Wide-screen cockpit', checked: u.cockpit !== false, onChange: (e) => setUi({ cockpit: e.target.checked }) })));
 }
 /** Wide screens (27" monitor, Steam Deck docked) show Today, the month and the team side by side. */
@@ -1506,7 +1510,7 @@ function openSearch() {
       // shift-log notes and corrections, by their words
       for (const [k, v] of Object.entries(s.shiftLog || {})) if (v?.note && v.note.toLowerCase().includes(rest)) items.push({ label: v.note.slice(0, 60), meta: `shift log · ${fmtDate(fromKey(k))}`, run: () => openDay(fromKey(k)) });
       for (const x of SW.list(s)) if (`${x.with} ${x.note} ${SW.KIND_LABEL[x.kind]}`.toLowerCase().includes(rest)) items.push({ label: `${SW.KIND_LABEL[x.kind]} · ${fmtDateShort(x.date)}`, meta: [x.with, x.note].filter(Boolean).join(' · '), run: () => openDay(x.date) });
-      const pages = [['payslip', 'Career › Pay', () => go('career', 'pay')], ['licence', 'Career › Licences', () => go('career', 'creds')], ['cme', 'Career › Licences', () => go('career', 'creds')], ['cv', 'Career › CV', () => go('career', 'cv')], ['leave', 'Month › Plan leave', () => go('month', 'leave')], ['swap', 'Month › Swaps and covers', () => go('month', 'swaps')], ['labour', 'Month › Labour law', () => go('month')], ['log', 'Month › Shift log', () => go('month', 'log')]];
+      const pages = [['payslip', 'Career › Pay', () => go('career', 'pay')], ['licence', 'Career › Licences', () => go('career', 'creds')], ['cme', 'Career › Licences', () => go('career', 'creds')], ['cv', 'Career › CV', () => go('career', 'cv')], ['leave', 'Month › Plan leave', () => go('month', 'leave')], ['swap', 'Month › Swaps and covers', () => go('month', 'swaps')], ['labour', 'Month › Labour law', () => go('month')], ['labor', 'Month › Labour law', () => go('month')], ['log', 'Month › Shift log', () => go('month', 'log')]];
       for (const [w, l, run] of pages) if (w.startsWith(rest) || rest.startsWith(w)) items.push({ label: l, meta: 'open', run });
     }
     items = items.slice(0, 14);

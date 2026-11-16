@@ -41,6 +41,11 @@ export function h(tag, attrs = {}, ...children) {
     if (c === null || c === undefined || c === false) continue;
     el.append(c instanceof Node ? c : document.createTextNode(String(c)));
   }
+  // a row that opens something works from the keyboard and reads as a button, like a real <button> (beta T6-01)
+  if (attrs?.onClick && !/^(button|a|input|select|textarea|label|summary|option)$/i.test(tag) && !el.hasAttribute('tabindex') && /\b(clickable|dir-item|tw-row|sw-opt|np-who)\b/.test(el.className)) {
+    el.tabIndex = 0; if (!el.hasAttribute('role')) el.setAttribute('role', 'button');
+    el.addEventListener('keydown', (e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target === el) { e.preventDefault(); el.click(); } });
+  }
   return el;
 }
 // Only http(s) links from outside data (app status files) may become hrefs

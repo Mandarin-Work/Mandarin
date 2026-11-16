@@ -32,7 +32,7 @@ function ratePicker(value, onPick, label) {
 }
 
 export function renderCareer() {
-  const s = S(), jobs = C.jobList(s), seg = h('div', { class: 'seg view-mode cr-seg', role: 'tablist' }, [['jobs', 'Jobs'], ['pay', 'Pay'], ['creds', 'Licences'], ['next', 'Next job'], ['cv', 'CV']].map(([k, l]) => h('button', { class: tab === k ? 'active' : '', role: 'tab', 'aria-selected': tab === k ? 'true' : 'false', onClick: () => { tab = k; ctx.render(); } }, l)));
+  const s = S(), jobs = C.jobList(s), seg = h('div', { class: 'seg view-mode cr-seg', role: 'group' }, [['jobs', 'Jobs'], ['pay', 'Pay'], ['creds', 'Licences'], ['next', 'Next job'], ['cv', 'CV']].map(([k, l]) => h('button', { class: tab === k ? 'active' : '', 'aria-pressed': tab === k ? 'true' : 'false', onClick: () => { tab = k; ctx.render(); } }, l)));
   const body = tab === 'next' ? nextJob(s, jobs) : tab === 'pay' ? CP.renderPay() : tab === 'creds' ? CP.renderCreds() : tab === 'cv' ? CP.renderCv() : myJobs(s, jobs);
   return [h('h1', {}, 'Career'), seg, ...[body].flat()];
 }
@@ -121,7 +121,8 @@ function postingBlock(p) {
 
 function jobSheet(j) {
   const v = { ...(j || { status: 'past', hoursWeek: 48, leave: 21, trialDays: 90, renews: true, renewNoticeDays: C.RENEW_NOTICE }), aspects: { ...(j?.aspects || {}) }, terms: (j?.terms || []).join('\n') };
-  const I = (k, o = {}) => h('input', { value: v[k] ?? '', ...o, onInput: (e) => { v[k] = o.type === 'number' ? (e.target.value === '' ? '' : +e.target.value) : e.target.value; } });
+  // amounts are text fields with a number keypad: a number field drops Arabic digits and minus signs without a word (T4-09)
+  const I = (k, o = {}) => h('input', { value: v[k] ?? '', ...o, ...(o.type === 'number' ? { type: 'text', inputmode: 'decimal', autocomplete: 'off' } : {}), onInput: (e) => { v[k] = e.target.value; } });
   const err = h('div', { class: 'cr-err', role: 'alert' });
   const save = () => {
     const problems = C.jobErrors(v); if (problems.length) { err.textContent = problems.join('. '); return toast(problems[0], 'err'); }
@@ -173,7 +174,7 @@ function offerCard({ o, r }, cur, rank) {
     h('div', { class: 'row wrap', style: { marginTop: '6px' } }, h('button', { class: 'btn sm ghost', onClick: () => offerSheet(o) }, '✎ Edit')));
 }
 function offerSheet(o) {
-  const v = { ...(o || { hoursWeek: 48, leave: 21, years: 1, status: 'considering' }), feel: { ...(o?.feel || {}) } }, I = (k, p = {}) => h('input', { value: v[k] ?? '', ...p, onInput: (e) => { v[k] = p.type === 'number' ? (e.target.value === '' ? '' : +e.target.value) : e.target.value; } });
+  const v = { ...(o || { hoursWeek: 48, leave: 21, years: 1, status: 'considering' }), feel: { ...(o?.feel || {}) } }, I = (k, p = {}) => h('input', { value: v[k] ?? '', ...p, ...(p.type === 'number' ? { type: 'text', inputmode: 'decimal', autocomplete: 'off' } : {}), onInput: (e) => { v[k] = e.target.value; } });
   const extra = h('div', { class: 'row wrap cr-fields' }), cur = C.currentJob(S());
   const drawExtra = () => extra.replaceChildren(...[v.housed ? field('Housing worth (SAR a month)', I('housedValue', { type: 'number', min: 0, placeholder: String(cur?.housing || Math.round((+v.basic || 0) * C.HOUSING_SHARE)) })) : null, v.ticket ? field('Ticket worth (SAR a year)', I('ticketValue', { type: 'number', min: 0 })) : null, v.insurance ? field('Insurance worth (SAR a year)', I('insuranceValue', { type: 'number', min: 0 })) : null].filter(Boolean));
   drawExtra();
@@ -183,7 +184,7 @@ function offerSheet(o) {
     h('div', { class: 'chips' }, [['ticket', 'Annual flight ticket'], ['insurance', 'Family insurance'], ['housed', 'Housing provided']].map(([k, l]) => h('button', { type: 'button', class: `chip ${v[k] ? 'sel' : ''}`, 'aria-pressed': v[k] ? 'true' : 'false', onClick: (e) => { v[k] = !v[k]; e.currentTarget.classList.toggle('sel', v[k]); e.currentTarget.setAttribute('aria-pressed', v[k] ? 'true' : 'false'); drawExtra(); } }, l))), extra,
     h('div', { class: 'title', style: { marginTop: '10px' } }, 'How does it feel?'), h('div', { class: 'tiny dim', style: { marginBottom: '6px' } }, '1 = awful, 5 = great, – = not rated yet (counts as 3)'), ...C.FEELS.map(([k, l]) => field(l, ratePicker(v.feel[k], (n) => { v.feel[k] = n; }, l))),
     field('Status', h('select', { onChange: (e) => { v.status = e.target.value; } }, ['considering', 'declined', 'accepted'].map(x => h('option', { value: x, selected: v.status === x }, x)))), field('Notes', h('textarea', { rows: 3, onInput: (e) => { v.notes = e.target.value; } }, v.notes || '')),
-    h('div', { class: 'row wrap' }, h('button', { class: 'btn primary grow', onClick: () => { if (!String(v.employer || '').trim()) return toast('Add the employer', 'err'); ctx.update(s => C.saveOffer(s, v)); box.close(); ctx.render(); } }, 'Save'), o ? h('button', { class: 'btn danger', onClick: () => { if (confirm('Delete this offer?')) { ctx.update(s => C.deleteOffer(s, o.id)); box.close(); ctx.render(); } } }, 'Delete') : null)]);
+    h('div', { class: 'row wrap' }, h('button', { class: 'btn primary grow', onClick: () => { if (!String(v.employer || '').trim()) return toast('Add the employer', 'err'); { const mp = C.moneyProblems(v); if (mp.length) return toast(`Check ${mp[0]}`, 'err'); } ctx.update(s => C.saveOffer(s, v)); box.close(); ctx.render(); } }, 'Save'), o ? h('button', { class: 'btn danger', onClick: () => { if (confirm('Delete this offer?')) { ctx.update(s => C.deleteOffer(s, o.id)); box.close(); ctx.render(); } } }, 'Delete') : null)]);
 }
 
 // ───────── file in / out (keeps salary details out of the code: you load them once, then they sync with your Drive state)
@@ -192,7 +193,7 @@ function importBtn() {
     const file = e.target.files?.[0]; e.target.value = ''; if (!file) return; let d;
     try { d = JSON.parse(await file.text()); } catch { return toast('That file is not JSON', 'err'); }
     try { let res; ctx.update(s => { res = C.importCareer(s, d); return res.state; }); const c = res.counts; toast(`Loaded ${C.importSummary(c) || 'nothing new'}${c.demoted.length ? `. ${c.demoted.map(o => o.employer).join(', ')} moved to past jobs` : ''}`); ctx.render(); }
-    catch { toast('That is not a career file: it needs jobs, offers or labor', 'err'); }
+    catch { toast('That is not a career file: it needs jobs, offers or labour', 'err'); }
   } });
   return [f, h('button', { class: 'btn', onClick: () => f.click() }, '⬆ Load career file')];
 }

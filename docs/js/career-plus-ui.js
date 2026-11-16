@@ -30,11 +30,16 @@ export function renderPay() {
       c.lines.map(l => h('div', { class: `small pay-l ${l.level}` }, l.level === 'warn' ? '⚠ ' : l.level === 'ok' ? '✓ ' : '· ', l.msg))); });
   return [head, ...rows];
 }
+const ymOf = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 function slipSheet(month = '') {
-  const s = S(), now = new Date(), def = month || `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`, cur = s.payslips?.[def] || {}, job = currentJob(s);
+  // a new payslip opens on the newest month not entered yet, empty: it never starts from another month's numbers (T4-03)
+  const s = S(), now = new Date();
+  let def = month; for (let i = 0; !def && i < 24; i++) { const k = ymOf(new Date(now.getFullYear(), now.getMonth() - i, 1)); if (!s.payslips?.[k]) def = k; }
+  def ||= ymOf(now);
+  const cur = month ? (s.payslips?.[def] || {}) : {}, job = P.jobForMonth(s, def) || currentJob(s);
   const v = { ...(job && !cur.at ? { basic: job.basic, housing: job.housing, transport: job.transport, other: job.other } : {}), ...cur }, errs = {};
   const mon = h('input', { type: 'month', value: def, max: `${now.getFullYear() + 1}-12` });
-  const inp = (k) => { errs[k] = errBox(); return field(P.LABELS[k], h('input', { type: 'number', inputmode: 'decimal', min: 0, step: '0.01', value: v[k] ?? '', placeholder: '0', onInput: (e) => { v[k] = e.target.value; } }), errs[k]); };
+  const inp = (k) => { errs[k] = errBox(); return field(P.LABELS[k], h('input', { type: 'text', inputmode: 'decimal', autocomplete: 'off', value: v[k] ?? '', placeholder: '0', onInput: (e) => { v[k] = e.target.value; } }), errs[k]); };
   errs.month = errBox();
   const paid = h('input', { type: 'date', value: cur.paidOn || '', onInput: (e) => { v.paidOn = e.target.value; } }), note = h('input', { value: cur.note || '', maxlength: 200, placeholder: 'Optional', onInput: (e) => { v.note = e.target.value; } });
   const box = ctx.sheet([h('h2', {}, month ? `Payslip · ${ymLabel(month)}` : 'Add a payslip'), h('div', { class: 'small muted' }, 'Stays in your own Drive; never sent to the hub.'),
@@ -43,7 +48,9 @@ function slipSheet(month = '') {
     h('div', { class: 'row wrap sh-foot' }, h('button', { class: 'btn primary grow', onClick: () => {
       const m = mon.value, e = P.slipErrors(m, v); for (const [k, el] of Object.entries(errs)) el.textContent = e[k] || '';
       if (Object.keys(e).length) return toast('Fix the highlighted field first', 'err');
-      const before = S().payslips?.[m]; ctx.update(x => { let y = P.saveSlip(x, m, v); if (month && month !== m) y = P.deleteSlip(y, month); return y; }); box.close(); toast(`Saved ${ymLabel(m)}`, 'ok'); if (before && !month) undo(`Replaced ${ymLabel(m)}`, before, m, 'payslips');
+      const before = S().payslips?.[m];
+      if (before && m !== month && !confirm(`${ymLabel(m)} already has a payslip (net ${before.net}). Replace it?`)) return;   // T4-02
+      ctx.update(x => { let y = P.saveSlip(x, m, v); if (month && month !== m) y = P.deleteSlip(y, month); return y; }); box.close(); toast(`Saved ${ymLabel(m)}`, 'ok'); if (before && m !== month) undo(`Replaced ${ymLabel(m)}`, before, m, 'payslips');
     } }, 'Save'), cur.at ? h('button', { class: 'btn ghost danger', onClick: () => { const before = cur; ctx.update(x => P.deleteSlip(x, def)); box.close(); undo(`${ymLabel(def)} removed`, before, def, 'payslips'); } }, 'Remove') : null)]);
 }
 
@@ -54,7 +61,7 @@ export function renderCreds() {
     return h('button', { class: `item clickable cred ${st.state}`, onClick: () => credSheet(c) }, h('div', { class: 'grow' }, h('div', { class: 'name' }, c.name), h('div', { class: 'meta' }, [K.KIND_LABEL[c.kind] !== c.name ? K.KIND_LABEL[c.kind] : '', c.number, c.provider].filter(Boolean).join(' · '))), h('span', { class: `chip ${st.state === 'expired' ? 'late' : st.state === 'soon' ? 'warnc' : ''}` }, word)); });
   const missing = ['scfhs', 'bls', 'acls'].filter(k => !list.some(c => c.kind === k));
   const credCard = h('div', { class: 'card' }, h('div', { class: 'row' }, h('div', { class: 'title grow' }, 'Licences and certificates'), h('button', { class: 'btn sm primary', onClick: () => credSheet() }, '＋ Add')),
-    list.length ? h('div', { class: 'list' }, credRows) : h('div', { class: 'small muted' }, 'Your SCFHS licence, BLS and ACLS, with their expiry dates. Mandarin warns 60 days ahead, on Today and in Citrus.'),
+    list.length ? h('div', { class: 'list' }, credRows) : h('div', { class: 'small muted' }, 'Your SCFHS licence, BLS and ACLS, with their expiry dates. Mandarin warns 60 days ahead on Today (and in Citrus, if you use it).'),
     missing.length ? h('div', { class: 'chips', style: { marginTop: '8px' } }, missing.map(k => h('button', { class: 'chip', onClick: () => credSheet({ kind: k }) }, `＋ ${K.KIND_LABEL[k]}`))) : null);
   const cmeCard = h('div', { class: 'card' }, h('div', { class: 'row' }, h('div', { class: 'title grow' }, 'CME hours'), h('button', { class: 'btn sm primary', onClick: () => cmeSheet() }, '＋ Log')),
     h('div', { class: 'row' }, h('div', { class: 'grow' }, h('b', { class: 'big-n' }, String(cme.last12)), h('span', { class: 'small muted' }, ` of ${cme.target} h in the last 12 months · ${cme.thisYear} h in ${now.getFullYear()}`)), h('button', { class: 'btn sm ghost', 'aria-label': 'CME target', onClick: targetSheet }, '⚙')),
@@ -103,12 +110,13 @@ function cvSheet() {
     h('button', { class: 'btn primary', onClick: () => { ctx.update(x => ({ ...x, cv: CV.cleanCv(v) })); box.close(); toast('CV saved', 'ok'); } }, 'Save')]);
 }
 function cvBlob() { return new Blob([CV.cvHtml(S())], { type: 'text/html' }); }
-function openCv() { const url = URL.createObjectURL(cvBlob()), w = window.open(url, '_blank', 'noopener'); if (!w) downloadCv(); setTimeout(() => URL.revokeObjectURL(url), 60000); }
+// window.open(…, 'noopener') always returns null, so the old fallback downloaded the CV on every tap (T4-08): a link opens it instead
+function openCv() { const url = URL.createObjectURL(cvBlob()), a = h('a', { href: url, target: '_blank', rel: 'noopener' }); document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 60000); }
 function downloadCv() { const a = h('a', { href: URL.createObjectURL(cvBlob()), download: `CV-${(S().cv?.name || 'mandarin').replace(/[^\w]+/g, '-')}.html` }); document.body.append(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000); }
 
 // ───────── Today: a licence close to expiry
 export function credsTodayCard(now = new Date()) {
   const due = K.dueSoon(S(), now, 60); if (!due.length) return null;
-  return h('div', { class: 'card' }, h('div', { class: 'title' }, 'Licences'), due.slice(0, 3).map(c => h('div', { class: `small ${c.days < 0 ? 'late' : ''}` }, `${c.name}: ${c.days < 0 ? `expired ${-c.days} days ago` : c.days === 0 ? 'expires today' : `expires in ${c.days} days (${fd(c.expires)})`}`)),
+  return h('div', { class: 'card' }, h('div', { class: 'title' }, 'Licences'), due.map(c => h('div', { class: `small ${c.days < 0 ? 'late' : ''}` }, `${c.name}: ${c.days < 0 ? `expired ${-c.days} days ago` : c.days === 0 ? 'expires today' : `expires in ${c.days} days (${fd(c.expires)})`}`)),
     h('button', { class: 'btn sm ghost', onClick: () => ctx.go('career', 'creds') }, 'Open Licences'));
 }
