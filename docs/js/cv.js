@@ -22,13 +22,13 @@ export function cvHtml(s, now = new Date()) {
   const c = { ...cleanCv(s.cv || {}), ...(s.cv || {}) }, jobs = cvJobs(s), creds = credList(s).filter(x => credState(x, now).state !== 'expired'), cme = cmeProgress(s, now);
   const sec = (t, body) => body ? `<section><h2>${esc(t)}</h2>${body}</section>` : '';
   const ul = (a) => a.length ? `<ul>${a.map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : '';
-  const exp = jobs.map(j => `<div class="job"><div class="jh"><b>${esc(j.role || 'Physician')}</b><span>${esc([j.from, j.to].filter(Boolean).join(' – '))}</span></div><div class="je">${esc([j.employer, j.city].filter(Boolean).join(', '))}</div>${j.sites.length ? `<div class="js">${esc(j.sites.join(' · '))}</div>` : ''}</div>`).join('');
+  const exp = jobs.map(j => `<div class="job"><div class="jh"><b>${esc(j.role || c.title || 'Doctor')}</b><span>${esc([j.from, j.to].filter(Boolean).join(' – '))}</span></div><div class="je">${esc([j.employer, j.city].filter(Boolean).join(', '))}</div>${j.sites.length ? `<div class="js">${esc(j.sites.join(' · '))}</div>` : ''}</div>`).join('');
   const lic = creds.map(x => `<li><b>${esc(x.name || KIND_LABEL[x.kind])}</b>${x.number ? ` · ${esc(x.number)}` : ''}${x.expires ? ` · valid to ${esc(ym(x.expires))}` : ''}</li>`).join('');
   const contact = [c.email, c.phone, c.city].filter(Boolean).map(esc).join(' · ');
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${esc(c.name || 'CV')}</title><meta name="viewport" content="width=device-width,initial-scale=1">
 <style>body{font:15px/1.45 "Source Sans 3",system-ui,sans-serif;color:#15182a;max-width:760px;margin:32px auto;padding:0 20px}h1{font-size:28px;margin:0}h2{font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:#a24b00;border-bottom:2px solid #f28a1b;padding-bottom:3px;margin:22px 0 8px}.sub{color:#566079;margin:2px 0 0}.job{margin:0 0 10px}.jh{display:flex;justify-content:space-between;gap:10px}.jh span,.je,.js{color:#566079}.js{font-size:13px}ul{margin:4px 0;padding-left:18px}@media print{body{margin:0}a{color:inherit}}</style></head>
-<body><header><h1>${esc(c.name || '')}</h1>${c.title ? `<p class="sub">${esc(c.title)}</p>` : ''}${contact ? `<p class="sub">${contact}</p>` : ''}</header>
-${sec('Profile', c.summary ? `<p>${esc(c.summary)}</p>` : '')}${sec('Experience', exp)}${sec('Licences and certificates', lic ? `<ul>${lic}</ul>` : '')}
+<body><header><h1>${esc(c.name || 'Curriculum vitae')}</h1>${c.title ? `<p class="sub">${esc(c.title)}</p>` : ''}${contact ? `<p class="sub">${contact}</p>` : ''}</header>
+${sec('Profile', c.summary ? `<p>${esc(c.summary).replace(/\n+/g, '<br>')}</p>` : '')}${sec('Experience', exp)}${sec('Licences and certificates', lic ? `<ul>${lic}</ul>` : '')}
 ${sec('Education', ul(lines(c.education)))}${sec('Continuing medical education', cme.last12 ? `<p>${cme.last12} CME hours in the last 12 months.</p>` : '')}${sec('Skills', ul(lines(c.skills)))}${sec('Languages', c.languages ? `<p>${esc(c.languages)}</p>` : '')}${sec('Other', ul(lines(c.extra)))}
 </body></html>`;
 }

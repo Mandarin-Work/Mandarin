@@ -38,7 +38,7 @@ function overview(s, y, mo) {
   if (loaded) { const lc = LU.laborCard(y, mo); if (lc) left.push(lc); }
   const c = SW.monthCounts(s, y, mo), n = Object.values(c).reduce((a, b) => a + b, 0), st = SL.monthStats(s, y, mo);
   if (!report) right.push(h('div', { class: 'card' }, h('div', { class: 'row' }, h('div', { class: 'title grow' }, 'Leave'), h('button', { class: 'btn sm primary', onClick: () => XU.leaveSheet() }, '🌴 Plan leave')), h('div', { class: 'small muted' }, 'Finds the windows that cost the fewest shifts, checks the notice and the labour-law rest, and pencils the days in (you can undo).')));
-  right.push(h('button', { class: 'card clickable mo-tile', onClick: () => { part = 'swaps'; ctx.render(); } }, h('div', { class: 'title' }, 'Swaps & covers'), h('div', { class: 'small' }, n ? Object.entries(c).filter(([, v]) => v).map(([k, v]) => `${v} ${SW.KIND_LABEL[k].toLowerCase()}`).join(' · ') : 'None this month')));
+  right.push(h('button', { class: 'card clickable mo-tile', onClick: () => { part = 'swaps'; ctx.render(); } }, h('div', { class: 'title' }, 'Swaps & covers'), h('div', { class: 'small' }, n ? Object.entries(c).filter(([, v]) => v).map(([k, v]) => `${v} ${SW.COUNT_WORD[k] || SW.KIND_LABEL[k].toLowerCase()}`).join(' · ') : 'None this month')));
   right.push(h('button', { class: 'card clickable mo-tile', onClick: () => { part = 'log'; ctx.render(); } }, h('div', { class: 'title' }, 'Shift log'), h('div', { class: 'small' }, st.rated ? `${st.rated} shifts rated · average ${st.avg}/5 ${SL.FACES[Math.round(st.avg) - 1] || ''}` : 'Nothing logged this month')));
   const uc = CHU.updatesCard(); if (uc) right.push(uc);
   return [h('div', { class: 'cols' }, h('div', {}, ...left), h('div', {}, ...right))];

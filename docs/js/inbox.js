@@ -32,6 +32,8 @@ export function accept(s, p) {
   if (item.type === 'posting') {
     // names → that day's floating nurses with the same matcher as "Paste list"; "mine" = your own GP site that day
     const date = fromKey(item.date), mySite = N.siteId(dayInfo(s, date).mine?.shift?.site || ''), rows = N.rowsFor(s, date);
+    // "mine" with no site of yours that day (off, or an admin day): say so and keep the proposal open (T5-10)
+    if (!mySite && item.postings.some(x => /^mine$/i.test(x.site))) return { state: s, error: `You have no site on ${item.date}, so “mine” can’t be placed. Post them from Nurses, or dismiss this.` };
     const text = item.postings.map(x => `${/^mine$/i.test(x.site) ? (N.siteLabel(mySite) || '') : x.site}: ${x.nurse}`).join('\n');
     const res = parsePostingList(text, rows); let next = s;
     for (const hit of res.hits) next = N.setPost(next, date, hit.key, hit.site, { tip: true, from: item.from || app, pulled: hit.pulled });

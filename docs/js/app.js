@@ -723,6 +723,7 @@ function acceptInbox(p, confirmed = false) {
   const touched = (coll) => [...new Set([...Object.keys(before[coll] || {}), ...Object.keys(res.state[coll] || {})])].filter(k => before[coll]?.[k] !== res.state[coll]?.[k]);
   const undo = { action: { label: 'Undo', run: () => store.update(s => { let x = s; for (const [coll, pre] of [['swaps', 'swap'], ['posts', 'post']]) for (const k of touched(coll)) x = store.revert(x, coll, pre, k, before[coll]?.[k]); const log = { ...(x.inboxLog || {}) }; delete log[p.ref]; return { ...x, inboxLog: log, settings: p.item.type === 'nurse' ? before.settings : x.settings }; }) } };
   if (p.item.type === 'posting') toast(`${res.placed} posting${res.placed === 1 ? '' : 's'} saved as heard${p.item.from ? ` from ${p.item.from}` : ''}${res.missed?.length ? ` · not matched: ${res.missed.join(', ')}` : ''}`, res.missed?.length ? 'err' : 'ok', undo);
+  else if (p.item.type === 'nurse' && res.missed) { const ref = p.ref; toast(`No single nurse matches "${p.item.nurse}" on your nurse sheets`, 'err', { action: { label: 'Dismiss', run: () => { store.update(x => IN.dismiss(x, ref)); render(); } } }); }   // T5-11: no loop of the same error
   else if (p.item.type === 'nurse') toast(res.missed ? `No single nurse matches "${p.item.nurse}" on your nurse sheets` : `${res.name}: ${p.item.canLead ? 'can be team leader' : 'no longer marked as a possible leader'}`, res.missed ? 'err' : 'ok');
   else if (p.item.type === 'swap') toast(`Swap saved for ${fmtDate(fromKey(p.item.date))}${p.item.with ? ` with ${p.item.with}` : ''}`, 'ok', undo);
 }
@@ -1137,6 +1138,8 @@ function onboardingCard() {
   const step = (n, title, sub, done = false) => h('li', { class: `ob-step ${done ? 'done' : ''}` }, h('span', { class: 'ob-n' }, done ? '✓' : n), h('div', {}, h('b', {}, title), h('div', { class: 'tiny dim' }, sub)));
   return h('div', { class: 'card onboard' }, h('div', { class: 'title' }, 'Get started'),
     h('ol', { class: 'ob-steps' }, step(1, 'Import your rota', 'The GP rota .xlsx; add FSED, Upper Village and nurses if you have them.'), step(2, 'Pick your row', 'Mandarin asks which person in the rota is you.'), step(3, 'Sign in with Google', 'Settings › Google: rotas in Drive › My Apps › Rotas import by themselves, and your work from Citrus comes over.', G.isSignedIn())),
+    // after "Not now" the work may still be in Citrus: one line to bring it over (T5-15)
+    S().migrated?.from === 'skipped' && (rt.signedIn || S().google?.connected) ? h('div', { class: 'small', style: { margin: '6px 0' } }, 'Your rotas may still be in Citrus. ', h('button', { class: 'linkish', onClick: () => migrateNow() }, 'Bring them over')) : null,
     dz);
 }
 
@@ -1210,7 +1213,7 @@ function calCell(date, info, known, todayK) {
   const txt = pen ? 'L' : !known ? '?' : !shift || shift.kind === 'off' ? '·' : shift.kind === 'leave' ? 'L' : shortCode(mine.code);
   const evs = rt.events[k] || [], plan = citrusBlocks(date), logged = !!s.shiftLog?.[k]?.rating, withN = mine && shift.kind === 'work' ? overlapCount(info) : 0, site = mine && shift.kind === 'work' ? siteNoOf(mine.code) : 0;
   const open = () => { rt.rotaSel = date; daySheet(date); };
-  const flags = [k === todayK ? 'today' : '', k < todayK ? 'past' : '', [5, 6].includes(date.getDay()) ? 'weekend' : '', rt.rotaSel && keyOf(rt.rotaSel) === k ? 'sel' : '', mine?.mci ? 'mci' : '', mine?.swap || pen ? 'swap' : '', tail ? 'tail' : '', logged ? 'logged' : ''].filter(Boolean).join(' ');
+  const flags = [k === todayK ? 'today' : '', k < todayK ? 'past' : '', [5, 6].includes(date.getDay()) ? 'weekend' : '', rt.rotaSel && keyOf(rt.rotaSel) === k ? 'sel' : '', mine?.mci ? 'mci' : '', mine?.swap || pen ? `swap sk-${SW.kindOf(S().swaps?.[k]) || 'fix'}` : '', tail ? 'tail' : '', logged ? 'logged' : ''].filter(Boolean).join(' ');
   return h('div', { class: `day ${flags}`, role: 'button', tabindex: '0', 'aria-label': dayLabel(date, info), onClick: open, onKeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } } },
     h('span', { class: 'n' }, date.getDate()),
     h('span', { class: `code ${cls}${site ? ` s${site}` : ''}` }, txt),
@@ -1245,7 +1248,7 @@ function renderRota({ compact = false } = {}) {
   const used = new Set([...grid.querySelectorAll('.code')].map(c => c.classList[1]));
   const key = [['D', 'D day'], ['N', 'N night'], ['E', 'E evening'], ['other', 'other', 'SF'], ['leave', 'L leave'], ['unk', '? unknown']].filter(([c]) => c !== 'unk' || used.has('unk'));
   const calCard = h('div', { class: 'card cal-card' }, banner, h('div', { class: 'cal-head' }, ...DAY_SHORT.map(x => h('span', {}, x))), grid,
-    h('div', { class: 'chips cal-key', style: { marginTop: '10px' } }, ...key.map(([c, l, chipCls]) => h('span', { class: `chip ${chipCls || c}` }, l)), h('span', { class: 'chip mci' }, '🚨 MCI 2nd'), known ? h('span', { class: 'chip tail-key' }, h('i'), 'after a night') : null));
+    h('div', { class: 'chips cal-key', style: { marginTop: '10px' } }, ...key.map(([c, l, chipCls]) => h('span', { class: `chip ${chipCls || c}` }, l)), h('span', { class: 'chip mci' }, '🚨 MCI 2nd'), known ? h('span', { class: 'chip tail-key' }, h('i'), 'after a night') : null, Object.keys(S().swaps || {}).length ? h('span', { class: 'chip swap-key' }, h('i', { class: 'sk-swap' }), 'swap ', h('i', { class: 'sk-gave' }), 'I covered ', h('i', { class: 'sk-got' }), 'covered for me ', h('i', { class: 'sk-fix' }), 'other change') : null));
   const out = [];
   if (compact) return [head, calCard];
   if (!rotas.length) {

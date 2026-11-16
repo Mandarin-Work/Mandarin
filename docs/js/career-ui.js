@@ -5,6 +5,7 @@ import * as CP from './career-plus-ui.js';
 import { lessons as offerLessons } from './cv.js';
 import { windows } from './labor.js';
 import { isNurseRota } from './model.js';
+import { revert } from './store.js';
 let ctx = null, openId = null, tab = 'jobs', showDeclined = false;
 export function careerTab(t) { if (['jobs', 'pay', 'creds', 'next', 'cv'].includes(t)) tab = t; }
 export function initCareer(c) { ctx = c; }
@@ -120,7 +121,7 @@ function postingBlock(p) {
 }
 
 function jobSheet(j) {
-  const v = { ...(j || { status: 'past', hoursWeek: 48, leave: 21, trialDays: 90, renews: true, renewNoticeDays: C.RENEW_NOTICE }), aspects: { ...(j?.aspects || {}) }, terms: (j?.terms || []).join('\n') };
+  const v = { ...(j || { status: C.currentJob(S()) ? 'past' : 'current', hoursWeek: 48, leave: 21, trialDays: 90, renews: true, renewNoticeDays: C.RENEW_NOTICE }), aspects: { ...(j?.aspects || {}) }, terms: (j?.terms || []).join('\n') };
   // amounts are text fields with a number keypad: a number field drops Arabic digits and minus signs without a word (T4-09)
   const I = (k, o = {}) => h('input', { value: v[k] ?? '', ...o, ...(o.type === 'number' ? { type: 'text', inputmode: 'decimal', autocomplete: 'off' } : {}), onInput: (e) => { v[k] = e.target.value; } });
   const err = h('div', { class: 'cr-err', role: 'alert' });
@@ -146,7 +147,13 @@ function jobSheet(j) {
       field('Overall rating', ratePicker(v.rating, (n) => { v.rating = n; }, 'Overall rating')), field('Why you left', I('reasonLeft')),
       ...C.ASPECTS.map(([k, l]) => field(l, ratePicker(v.aspects[k], (n) => { v.aspects[k] = n; }, l)))),
     field('Notes', h('textarea', { rows: 3, onInput: (e) => { v.notes = e.target.value; } }, v.notes || '')), err,
-    h('div', { class: 'row wrap' }, h('button', { class: 'btn primary grow', onClick: save }, 'Save'), j ? h('button', { class: 'btn danger', onClick: () => { if (confirm('Delete this job?')) { ctx.update(s => C.deleteJob(s, j.id)); box.close(); ctx.render(); } } }, 'Delete') : null)]);
+    h('div', { class: 'row wrap' }, h('button', { class: 'btn primary grow', onClick: save }, 'Save'), j ? h('button', { class: 'btn danger', onClick: () => {
+      // Undo instead of a bare confirm, like Pay and Licences; its postings go with it, and come back with the Undo (T4-30)
+      const before = S(), kids = Object.values(before.jobs || {}).filter(x => x.postingOf === j.id);
+      if (kids.length && !confirm(`Delete ${j.employer || 'this job'} and its ${kids.length} posting${kids.length > 1 ? 's' : ''}?`)) return;
+      ctx.update(s => [j, ...kids].reduce((y, x) => C.deleteJob(y, x.id), s)); box.close(); ctx.render();
+      toast(`${j.employer || 'Job'} deleted`, 'ok', { action: { label: 'Undo', run: () => { ctx.update(s => [j, ...kids].reduce((y, x) => revert(y, 'jobs', 'job', x.id, x), s)); ctx.render(); } } });
+    } }, 'Delete') : null)]);
 }
 
 // ───────── next job
@@ -192,7 +199,7 @@ function importBtn() {
   const f = h('input', { type: 'file', accept: '.json,application/json', style: { display: 'none' }, onChange: async (e) => {
     const file = e.target.files?.[0]; e.target.value = ''; if (!file) return; let d;
     try { d = JSON.parse(await file.text()); } catch { return toast('That file is not JSON', 'err'); }
-    try { let res; ctx.update(s => { res = C.importCareer(s, d); return res.state; }); const c = res.counts; toast(`Loaded ${C.importSummary(c) || 'nothing new'}${c.demoted.length ? `. ${c.demoted.map(o => o.employer).join(', ')} moved to past jobs` : ''}`); ctx.render(); }
+    try { let res; ctx.update(s => { res = C.importCareer(s, d); return CP.importExtras(res.state, d, res.counts); }); const c = res.counts; toast(`Loaded ${C.importSummary(c) || 'nothing new'}${c.demoted.length ? `. ${c.demoted.map(o => o.employer).join(', ')} moved to past jobs` : ''}`); ctx.render(); }
     catch { toast('That is not a career file: it needs jobs, offers or labour', 'err'); }
   } });
   return [f, h('button', { class: 'btn', onClick: () => f.click() }, '⬆ Load career file')];

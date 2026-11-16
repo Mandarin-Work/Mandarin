@@ -27,6 +27,7 @@ export function credErrors(c) {
   const e = {};
   if (!txt(c.name, 80) && !KIND_LABEL[c.kind]) e.name = 'Name it';
   if (c.issued && c.expires && c.expires < c.issued) e.expires = 'Expires before it was issued';
+  { const d = new Date(), today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; if (c.issued && c.issued > today) e.issued = 'Issued in the future? Check the date'; }
   return e;
 }
 export const saveCred = (s, c) => { const x = cleanCred(c); return { ...s, creds: { ...(s.creds || {}), [x.id]: x } }; };
@@ -50,7 +51,7 @@ export function cleanCme(x) {
   const hours = Math.round(Math.max(0, Math.min(200, +x.hours || 0)) * 4) / 4;
   return { id: x.id || uid(), date: d(x.date) || keyOf(new Date()), title: txt(x.title, 120), hours, cat: CME_CATS.some(([k]) => k === x.cat) ? x.cat : '1', provider: txt(x.provider, 80), at: Date.now() };
 }
-export const cmeErrors = (x) => { const e = {}; if (!txt(x.title, 120)) e.title = 'What was it?'; if (!(+x.hours > 0)) e.hours = 'Hours above 0'; if (+x.hours > 200) e.hours = 'At most 200 h'; return e; };
+export const cmeErrors = (x) => { const e = {}; if (!txt(x.title, 120)) e.title = 'What was it?'; if (!(+x.hours > 0)) e.hours = 'Hours above 0'; else if (+x.hours < 0.25) e.hours = 'At least ¼ h (hours are kept in quarters)'; if (+x.hours > 200) e.hours = 'At most 200 h'; return e; };
 export const saveCme = (s, x) => { const c = cleanCme(x); return { ...s, cme: { ...(s.cme || {}), [c.id]: c } }; };
 export function deleteCme(s, id) { const m = { ...(s.cme || {}) }; delete m[id]; return { ...s, cme: m, deleted: { ...(s.deleted || {}), [`cme:${id}`]: Date.now() } }; }
 export const cmeList = (s) => Object.values(s.cme || {}).sort((a, b) => b.date.localeCompare(a.date));

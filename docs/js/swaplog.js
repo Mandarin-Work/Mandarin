@@ -8,6 +8,7 @@ import { fromKey, keyOf } from './util.js';
 
 export const KINDS = [['swap', 'Swap', 'You traded shifts'], ['gave', 'I covered', 'You worked their shift: they owe you one'], ['got', 'Covered for me', 'They worked yours: you owe them'], ['leave', 'Leave', ''], ['cancel', 'Cancelled', 'The shift did not happen'], ['fix', 'Rota fix', 'The rota had it wrong']];
 export const KIND_LABEL = Object.fromEntries(KINDS.map(([k, l]) => [k, l]));
+export const COUNT_WORD = { swap: 'swaps', gave: 'covers I did', got: 'covered for me', leave: 'leave', cancel: 'cancelled', fix: 'fixes' };   // "3 covers I did", never "3 i covered" (T2-16)
 export function kindOf(x) {
   if (x?.kind && KIND_LABEL[x.kind]) return x.kind;
   if (interpretCode(x?.code || '', {}, 'gp').kind === 'leave') return 'leave';
@@ -25,10 +26,11 @@ export function balances(s) {
   const by = new Map();
   for (const x of list(s)) {
     if (!x.with) continue;
-    const b = by.get(x.with) || { name: x.with, gave: 0, got: 0, swaps: 0, last: null };
+    const nm = String(x.with).replace(/\s*[-–]\s*(TL|team leader|in ?charge|IC)\s*$/i, '').trim(), id = nm.toLowerCase();   // " - TL" is a role, not another person (T2-17)
+    const b = by.get(id) || { name: nm, gave: 0, got: 0, swaps: 0, last: null };
     if (x.kind === 'gave') b.gave++; else if (x.kind === 'got') b.got++; else if (x.kind === 'swap') b.swaps++;
     if (!b.last || x.key > keyOf(b.last)) b.last = x.date;
-    by.set(x.with, b);
+    by.set(id, b);
   }
   return [...by.values()].map(b => ({ ...b, balance: b.gave - b.got })).sort((a, b) => Math.abs(b.balance) - Math.abs(a.balance) || b.swaps - a.swaps);
 }

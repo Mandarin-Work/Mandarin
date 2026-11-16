@@ -120,3 +120,13 @@ export function credsTodayCard(now = new Date()) {
   return h('div', { class: 'card' }, h('div', { class: 'title' }, 'Licences'), due.map(c => h('div', { class: `small ${c.days < 0 ? 'late' : ''}` }, `${c.name}: ${c.days < 0 ? `expired ${-c.days} days ago` : c.days === 0 ? 'expires today' : `expires in ${c.days} days (${fd(c.expires)})`}`)),
     h('button', { class: 'btn sm ghost', onClick: () => ctx.go('career', 'creds') }, 'Open Licences'));
 }
+
+/** The rest of a career file: payslips, licences, CME and the CV, each checked like a hand entry (T4-17). */
+export function importExtras(st, d, counts = {}) {
+  let s = st;
+  if (d.payslips && typeof d.payslips === 'object' && !Array.isArray(d.payslips)) for (const [m, x] of Object.entries(d.payslips)) if (x && typeof x === 'object' && !Object.keys(P.slipErrors(m, x)).length) { s = P.saveSlip(s, m, x); counts.payslips = (counts.payslips || 0) + 1; }
+  if (Array.isArray(d.creds)) for (const c of d.creds) if (c && typeof c === 'object' && !Object.keys(K.credErrors(c)).length) { s = K.saveCred(s, c); counts.creds = (counts.creds || 0) + 1; }
+  if (Array.isArray(d.cme)) for (const c of d.cme) if (c && typeof c === 'object' && !Object.keys(K.cmeErrors(c)).length) { s = K.saveCme(s, c); counts.cme = (counts.cme || 0) + 1; }
+  if (d.cv && typeof d.cv === 'object' && !Array.isArray(d.cv) && Object.keys(d.cv).length) { s = { ...s, cv: CV.cleanCv(d.cv) }; counts.cv = 1; }
+  return s;
+}

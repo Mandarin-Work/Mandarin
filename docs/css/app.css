@@ -1410,3 +1410,10 @@ html[data-ui="paper"] .orange, html[data-ui="paper"] .cal .day.today .n { color:
 }
 /* wide tables in a sheet scroll sideways instead of overflowing it at 320px (T6-09) */
 .sheet table { display: block; max-width: 100%; overflow-x: auto; }
+/* the correction dot says what kind of change it is, and the key explains it (T2-09) */
+.cal .day.sk-gave::after, .swap-key .sk-gave { background: var(--good, #3fbf7f); }
+.cal .day.sk-got::after, .swap-key .sk-got { background: var(--warn, #e0a030); }
+.cal .day.sk-swap::after, .swap-key .sk-swap { background: var(--eve); }
+.cal .day.sk-leave::after, .cal .day.sk-cancel::after, .cal .day.sk-fix::after, .swap-key .sk-fix { background: var(--dim, #8a90a6); }
+.swap-key i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin: 0 4px 0 6px; vertical-align: middle; }
+.swap-key i:first-child { margin-left: 0; }

@@ -111,7 +111,10 @@ export function keyDates(j, now = new Date()) {
   if (j.iqamaExpiry) out.push({ id: 'iqama', label: 'Iqama expires', date: j.iqamaExpiry, days: days(j.iqamaExpiry) });
   return out.sort((a, b) => a.date.localeCompare(b.date));
 }
-export const upcoming = (j, now = new Date(), within = 120) => keyDates(j, now).filter(k => k.id !== 'trial' && k.id !== 'renewed' && k.days >= 0 && k.days <= within);
+// a notice deadline that has passed while the term still runs is news too: the contract now renews by itself (T4-13)
+export const upcoming = (j, now = new Date(), within = 120) => { const all = keyDates(j, now), end = all.find(k => k.id === 'end');
+  return all.flatMap(k => k.id === 'renew' && k.days < 0 && end && end.days >= 0 && end.days <= within ? [{ ...k, id: 'renew-passed', label: 'Notice deadline passed: the contract renews automatically', days: end.days }] : [k])
+    .filter(k => k.id !== 'trial' && k.id !== 'renewed' && (k.days >= 0 || k.id === 'renew-passed') && k.days <= within); };
 
 // ───────── money
 /** Art. 85 share of the award when YOU resign, by completed years. */
@@ -140,7 +143,8 @@ export function realHourly(j, months) { const t = total(j), contractH = r1(num(j
 /** Things in the contract worth a second look. */
 export function flags(j, now = new Date()) {
   const out = [], y = yearsServed(j, now);
-  if (j.leave && j.leave < 21) out.push({ level: 'violation', msg: `Annual leave ${j.leave} days is below the legal minimum of 21 (Labour Law Art. 109)` });
+  if (!j.leave) out.push({ level: 'warn', msg: 'No annual leave in the contract: the legal minimum is 21 days (Labour Law Art. 109)' });
+  else if (j.leave < 21) out.push({ level: 'violation', msg: `Annual leave ${j.leave} days is below the legal minimum of 21 (Labour Law Art. 109)` });
   else if (j.leave && j.leave < 30 && y >= 5 && j.status === 'current') out.push({ level: 'violation', msg: `After 5 years of service annual leave is at least 30 days, the contract gives ${j.leave} (Art. 109)` });
   if (j.hoursWeek > 48) out.push({ level: 'violation', msg: `${j.hoursWeek}h a week is over the 48h limit (Art. 98)` });
   if (j.trialDays > 180) out.push({ level: 'violation', msg: `A ${j.trialDays}-day trial period is over the 180-day maximum (Art. 53)` });
@@ -201,11 +205,13 @@ const offerKey = (o) => `${norm(o.employer)}|${norm(o.role)}`;
 export function importCareer(s, d) {
   if (!d || typeof d !== 'object' || Array.isArray(d)) throw new Error('not a career file');
   const jobsIn = Array.isArray(d.jobs) ? d.jobs : [], offersIn = Array.isArray(d.offers) ? d.offers : [], labor = d.labor && typeof d.labor === 'object' && !Array.isArray(d.labor) ? d.labor : null;
-  if (!jobsIn.length && !offersIn.length && !labor) throw new Error('not a career file');
+  const extras = (d.payslips && typeof d.payslips === 'object') || Array.isArray(d.creds) || Array.isArray(d.cme) || (d.cv && typeof d.cv === 'object');
+  if (!jobsIn.length && !offersIn.length && !labor && !extras) throw new Error('not a career file');
   const n = { jobsAdded: 0, jobsUpdated: 0, offersAdded: 0, offersUpdated: 0, labor: !!labor, demoted: [] }, jobs = { ...(s.jobs || {}) }, offers = { ...(s.offers || {}) }, idMap = {};
   const byKey = (list, keyFn) => Object.fromEntries(Object.values(list).map(x => [keyFn(x), x.id]));
   const jk = byKey(jobs, jobKey);
-  for (const raw of jobsIn.filter(j => j && !j.postingOf).concat(jobsIn.filter(j => j && j.postingOf))) {
+  // an entry with no employer is junk, not a job (T4-18)
+  for (const raw of jobsIn.filter(j => j && typeof j === 'object' && String(j.employer || '').trim()).filter(j => !j.postingOf).concat(jobsIn.filter(j => j && typeof j === 'object' && String(j.employer || '').trim() && j.postingOf))) {
     const pj = { ...raw, ...(raw.postingOf ? { postingOf: idMap[raw.postingOf] || raw.postingOf } : {}) }, hit = (pj.id && jobs[pj.id] ? pj.id : '') || jk[jobKey(pj)];
     if (!pj.postingOf) delete pj.postingOf;
     // An update keeps what the file does not carry (a posting link, ratings you added by hand).
@@ -224,7 +230,8 @@ export function importCareer(s, d) {
 /** "2 jobs, 1 offer, labor settings" (added / updated). */
 export function importSummary(c) {
   const pl = (x, w) => `${x} ${w}${x === 1 ? '' : 's'}`, part = (a, u, w) => a + u ? `${pl(a + u, w)}${u ? ` (${u} updated)` : ''}` : '';
-  return [part(c.jobsAdded, c.jobsUpdated, 'job'), part(c.offersAdded, c.offersUpdated, 'offer'), c.labor ? 'labour settings' : ''].filter(Boolean).join(', ');
+  return [part(c.jobsAdded, c.jobsUpdated, 'job'), part(c.offersAdded, c.offersUpdated, 'offer'), c.labor ? 'labour settings' : '', c.payslips ? pl(c.payslips, 'payslip') : '', c.creds ? pl(c.creds, 'licence') : '', c.cme ? `${c.cme} CME entr${c.cme === 1 ? 'y' : 'ies'}` : '', c.cv ? 'your CV' : ''].filter(Boolean).join(', ');
 }
 /** What the export writes; import reads the same shape back. */
-export const exportData = (s) => ({ jobs: jobList(s), offers: offerList(s), labor: s.settings?.labor || {} });
+// the whole career file: jobs, offers, labour settings, payslips, licences, CME and the CV (T4-17)
+export const exportData = (s) => ({ app: 'mandarin-career', jobs: jobList(s), offers: offerList(s), labor: s.settings?.labor || {}, payslips: s.payslips || {}, creds: Object.values(s.creds || {}), cme: Object.values(s.cme || {}), cv: s.cv || {} });
