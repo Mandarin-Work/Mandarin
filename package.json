@@ -1,0 +1,8 @@
+{
+  "name": "mandarin",
+  "private": true,
+  "type": "module",
+  "version": "1.0.0",
+  "description": "Mandarin — Scheduler & Work: rotas, team, nurses, leave, labour-law check, shift log and career. A PWA with no build step.",
+  "scripts": { "test": "bash test/all.sh", "bump": "sh scripts-bump.sh" }
+}

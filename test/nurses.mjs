@@ -1,0 +1,93 @@
+// Nurses' schedule parsing + postings + who-works-with-me. Run: node test/nurses.mjs
+import assert from 'node:assert/strict'; import fs from 'node:fs';
+globalThis.location = { href: 'https://x/' }; globalThis.localStorage = { getItem: () => null, setItem() {}, removeItem() {} };
+import { parseRotaFile, serializeRota, interpretCode } from '../docs/js/rota-parser.js'; import * as N from '../docs/js/nurses.js'; import { dayInfo } from '../docs/js/model.js'; import { mergeStates } from '../docs/js/store.js';
+const file = new URL('./data/nurses.xlsx', import.meta.url).pathname; let fails = 0;
+const t = async (n, f) => { try { await f(); console.log('  ✓', n); } catch (e) { fails++; console.log('  ✗', n, '\n    ', e.stack.split('\n').slice(0, 3).join('\n     ')); } };
+const D = (d) => new Date(2026, 10, d);
+// a GP rota with me at Upper Village (D1) on the 9th, Lower Village (D2) on the 10th, night at UV on the 11th
+const gp = { id: 'gp-2026-11', unitKind: 'gp', year: 2026, month: 11, daysInMonth: 30, legend: { D: { hours: { start: 480, end: 1200, overnight: false, durationMin: 720 } }, N: { hours: { start: 1200, end: 480, overnight: true, durationMin: 720 } }, D1: { desc: 'Upper Village' }, D2: { desc: 'Lower Village' }, N1: { desc: 'Upper Village' } }, people: [{ name: 'Dr Me', id: '1', days: { 9: 'D1', 10: 'D2', 11: 'N1' } }, { name: 'Dr Colleague', id: '2', days: { 9: 'D1' } }] };
+let nurse = null;
+if (fs.existsSync(file)) {
+  const buf = fs.readFileSync(file); nurse = serializeRota(await parseRotaFile(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength), 'QID-Nov.26_Schedule.xlsx'));
+  await t('real file: read as a NURSE schedule, not a GP rota', () => { assert.equal(nurse.unitKind, 'nurse'); assert.equal(nurse.id, 'nurse-2026-11'); assert.equal(nurse.year, 2026); assert.equal(nurse.month, 11); assert.ok(nurse.weekdayOk); assert.equal(nurse.people.length, 50); });
+  await t('section headings are not people; names, IDs, titles, numbers read (no real names in this file)', () => {
+    assert.ok(!nurse.people.some(p => /construction|qiddiyah project|free standing|upper\s+plat/i.test(p.name)));
+    const leaders = nurse.people.filter(p => p.group === 'leaders'); assert.ok(leaders.length >= 3 && leaders.some(p => p.leader)); const c = leaders[0];
+    assert.match(c.id, /^\d{5,7}$/); assert.match(c.title, /^(RN|SN|HN)/); assert.match(c.mobile, /^5\d{8}$/); assert.ok(c.clinic);
+  });
+  await t('groups: leaders, first aiders, pool, FSED, Aqua Arabia, Six Flags, Upper Plateau, Nairiya', () => {
+    const n = {}; nurse.people.forEach(p => n[p.group] = (n[p.group] || 0) + 1); assert.deepEqual(n, { head: 1, leaders: 6, fa: 2, pool: 25, fsed: 6, aqua: 4, sixflags: 4, plateau: 1, nairiya: 1 });
+  });
+  await t('legend: hours for every code, leave, training, rest days are off', () => {
+    const L = nurse.legend; assert.deepEqual([L.D.hours.start, L.D.hours.end], [480, 1200]); assert.ok(L.N.hours.overnight); assert.deepEqual([L.M.hours.start, L.M.hours.end], [720, 1440]); assert.deepEqual([L.A.hours.start, L.A.hours.end], [480, 960]); assert.equal(L['A+'].hours.start, 600); assert.ok(L.A2.hours.overnight); assert.equal(L['B+'].hours.durationMin, 570);
+    const kinds = new Set(nurse.people.flatMap(p => Object.values(p.days).map(v => interpretCode(v, nurse.legend, 'nurse').kind)));
+    for (const k of ['work', 'leave', 'other']) assert.ok(kinds.has(k), `some day reads as ${k}`);
+  });
+  await t('headcount per day matches the sheet’s own counts (D16 on the 1st, N6, M2)', () => {
+    const st = N.staffing({ rotas: { n: nurse } }, D(1)); assert.equal(st.byShift.D, 16); assert.equal(st.byShift.N, 6); assert.equal(st.byShift.M, 2);
+  });
+}
+const base = () => ({ rotas: { gp, ...(nurse ? { n: nurse } : {}) }, me: { id: '1', name: 'Dr Me' }, posts: {}, deleted: {} });
+await t('nurses never leak into the doctors’ day: not colleagues, not on leave, not in coverage', () => {
+  const info = dayInfo(base(), D(9)); assert.ok(info.entries.every(e => e.rota.unitKind !== 'nurse')); assert.ok(info.leave.length === 0); assert.equal(Object.values(info.bySite).flat().length, 2);
+});
+if (nurse) {
+  await t('who will work with me: pool + leaders, not FSED / Aqua / Plateau; overlap-sorted', () => {
+    const s = base(), mine = dayInfo(s, D(9)).mine, w = N.workingWithMe(s, D(9), mine);
+    assert.equal(w.site, 'UPV'); assert.equal(w.confirmed.length, 0); assert.ok(w.possible.length >= 10, 'possible ' + w.possible.length);
+    assert.ok(w.possible.every(p => ['pool', 'leaders', 'fa', 'head'].includes(p.group)), 'no fixed groups'); assert.ok(w.possible.every(p => p.overlap > 0));
+    assert.ok(w.possible.every(p => p.group !== 'leaders' || p.choices.includes('UPV')));
+    const ov = w.possible.map(p => p.pct); assert.ok(w.possible[0].chance * w.possible[0].pct >= w.possible.at(-1).chance * w.possible.at(-1).pct);
+  });
+  await t('posting a nurse to my site confirms her; posting elsewhere removes her; clearing restores', () => {
+    let s = base(); const mine = () => dayInfo(s, D(9)).mine, who = N.rowsFor(s, D(9)).find(r => r.group === 'pool' && r.shift.type === 'D');
+    s = N.setPost(s, D(9), who.key, 'UPV'); let w = N.workingWithMe(s, D(9), mine()); assert.ok(w.confirmed.some(c => c.key === who.key)); assert.ok(!w.possible.some(c => c.key === who.key));
+    s = N.setPost(s, D(9), who.key, 'LPV'); w = N.workingWithMe(s, D(9), mine()); assert.ok(!w.confirmed.some(c => c.key === who.key) && !w.possible.some(c => c.key === who.key)); assert.equal(w.elsewhere, 1);
+    s = N.setPost(s, D(9), who.key, ''); w = N.workingWithMe(s, D(9), mine()); assert.ok(w.possible.some(c => c.key === who.key)); assert.ok(s.deleted[`post:${D(9).getFullYear()}-11-09:${who.key}`]);
+  });
+  await t('history teaches the app: suggestions and chances', () => {
+    let s = base(); const who = N.rowsFor(s, D(10)).find(r => r.group === 'pool' && r.shift.type === 'D' && N.rowsFor(s, D(9)).some(x => x.key === r.key));
+    assert.ok(who, 'a pool nurse on D both days');
+    s = N.setPost(s, D(9), who.key, 'UPV'); s = N.setPost(s, D(8), who.key, 'UPV');
+    assert.equal(N.rowsFor(s, D(10)).find(r => r.key === who.key).suggest, 'UPV');
+    const w0 = N.workingWithMe(base(), D(11), dayInfo(base(), D(11)).mine); const w1 = N.workingWithMe(s, D(11), dayInfo(s, D(11)).mine);
+    s = N.applySuggestions(s, D(10)); assert.equal(N.postOf(s, D(10), who.key), '', 'a guess is never a confirmed posting'); assert.equal(N.tipOf(s, D(10), who.key).site, 'UPV');
+  });
+  await t('tips: heard postings rank above guesses, never count as fact or history', () => {
+  let s = base(); const mine = () => dayInfo(s, D(9)).mine, who = N.rowsFor(s, D(9)).find(r => r.group === 'pool' && r.shift.type === 'D');
+  s = N.setPost(s, D(9), who.key, 'UPV', { tip: true, from: 'the team leader' }); assert.equal(N.postOf(s, D(9), who.key), ''); assert.deepEqual(N.tipOf(s, D(9), who.key), { site: 'UPV', from: 'the team leader' });
+  let w = N.workingWithMe(s, D(9), mine()); assert.equal(w.confirmed.length, 0); assert.equal(w.tipped.length, 1); assert.equal(w.tipped[0].heardFrom, 'the team leader'); assert.ok(!w.possible.some(x => x.key === who.key));
+  assert.equal(N.history(s, who.key, D(20)).length, 0, 'a tip is not history'); assert.equal(N.staffing(s, D(9)).bySite.UPV, undefined, 'a tip is not on the board as posted');
+  s = N.setPost(s, D(9), who.key, 'LPV', { tip: true, from: 'the team leader' }); w = N.workingWithMe(s, D(9), mine()); assert.equal(w.tipped.length, 0); assert.equal(w.tippedElsewhere, 1); assert.ok(!w.possible.some(x => x.key === who.key));
+  s = N.setPost(s, D(9), who.key, 'UPV'); w = N.workingWithMe(s, D(9), mine()); assert.equal(w.confirmed.length, 1); assert.equal(w.tipped.length, 0, 'confirming replaces the tip');
+});
+await t('leaders go to UPV/LPV only (the sheet heading); fixed groups carry their place; posts merge across devices', () => {
+    const s = base(), rows = N.rowsFor(s, D(1)); const lead = rows.find(r => r.group === 'leaders'), fsed = rows.find(r => r.group === 'fsed');
+    assert.deepEqual(lead.choices, ['UPV', 'LPV']); assert.equal(fsed.post, 'FSED'); assert.equal(N.setPost(s, D(1), fsed.key, 'UPV').posts[`2026-11-01:${fsed.key}`].site, 'UPV');
+    const a = N.setPost(s, D(1), lead.key, 'UPV'), b = N.setPost(s, D(1), 'id:99', 'LPO'); const m = mergeStates(a, b); assert.equal(Object.keys(m.posts).length, 2);
+  });
+}
+await t('no nurse schedule loaded → quiet', () => { const s = { rotas: { gp }, me: { id: '1', name: 'Dr Me' }, posts: {} }; assert.equal(N.workingWithMe(s, D(9), dayInfo(s, D(9)).mine).hasNurses, false); assert.deepEqual(N.rowsFor(s, D(9)), []); assert.equal(N.workingWithMe(s, D(20), dayInfo(s, D(20)).mine), null); });
+await t('nights: 2 per village, no office clinics; "N candidates for 2 places" with a 2-of-N prior (owner, 14/11)', () => {
+  const N2 = { kind: 'work', type: 'N', hours: { start: 1200, end: 480, overnight: true, durationMin: 720 } }, D = { kind: 'work', type: 'D', hours: { start: 480, end: 1200, durationMin: 720 } };
+  assert.deepEqual(N.openSites({}, N2, ['UPV', 'LPV', 'UPO', 'LPO']), ['UPV', 'LPV']); assert.deepEqual(N.openSites({}, D, ['UPV', 'LPV', 'UPO', 'LPO']), ['UPV', 'LPV', 'UPO', 'LPO'], 'days: all open until known');
+  assert.equal(N.seatsFor({}, N2).LPV, 2); assert.equal(N.seatsFor({ settings: { nurseStaffing: { night: { LPV: 3 } } } }, N2).LPV, 3, 'owner can override');
+  const legend = { N: { desc: 'Night', hours: N2.hours } }, mk = (id, g) => ({ name: `Nurse ${id}`, id, group: g, days: { 5: 'N' } });
+  const rota = { id: 'nurse-2026-12', unitKind: 'nurse', year: 2026, month: 12, daysInMonth: 31, legend, people: [mk('1', 'pool'), mk('2', 'pool'), mk('3', 'leaders'), mk('4', 'leaders'), mk('5', 'fsed'), mk('6', 'fsed')] };
+  const st = { rotas: { rota } }, d = new Date(2026, 11, 5), mine = { shift: { kind: 'work', type: 'N', site: 'Lower Village', hours: N2.hours } };
+  assert.ok(N.rowsFor(st, d).filter(r => !r.fixed).every(r => !r.choices.includes('UPO') && !r.choices.includes('LPO')), 'nobody is offered an office clinic at night');
+  const w = N.workingWithMe(st, d, mine); assert.equal(w.possible.length, 4, 'the two FSED nurses are never candidates'); assert.equal(w.summary, '4 candidates for 2 places at Lower Village · not posted yet');
+  assert.ok(w.possible.every(p => Math.abs(p.chance - 0.5) < 1e-9), '2 places out of 4 = 50% each with no history');
+});
+await t('days: about 5 per village, Lower Village 3 on Fridays; office clinics 1 nurse (owner, 14/11)', () => {
+  const D = { kind: 'work', type: 'D', hours: { start: 480, end: 1200, durationMin: 720 } };
+  assert.equal(N.seatsFor({}, D, new Date(2026, 10, 15)).UPV, 5); assert.equal(N.seatsFor({}, D, new Date(2026, 10, 15)).LPV, 5);
+  assert.equal(N.seatsFor({}, D, new Date(2026, 10, 20)).LPV, 3, 'Friday'); assert.equal(N.seatsFor({}, D, new Date(2026, 10, 20)).UPO, 0, 'Friday office clinics are paramedic-run'); assert.deepEqual(N.openSites({}, D, ['UPV', 'LPV', 'UPO', 'LPO'], new Date(2026, 10, 20)), ['UPV', 'LPV']); assert.equal(N.seatsFor({}, D, new Date(2026, 10, 20)).UPV, 5);
+  assert.equal(N.seatsFor({}, D, new Date(2026, 10, 15)).UPO, 1, 'office clinics: 1 nurse by day'); assert.equal(N.seatsFor({}, D, new Date(2026, 10, 15)).LPO, 1); assert.deepEqual(N.openSites({}, D, ['UPV', 'LPV', 'UPO', 'LPO']).length, 4);
+});
+// park clinics: nurses + paramedics, park hours; FSED 24h
+{ const N = await import('../docs/js/nurses.js');
+  const ok = N.placeNote('Aqua Arabia').includes('no doctor') && N.placeNote('Six Flags').includes('park hours') && N.placeNote('Six Flags').includes('doctors') && !N.placeNote('Six Flags').includes('no doctor') && N.placeNote('FSED').includes('24 hours') && N.placeNote('FSED').includes('Free Standing');
+  if (!ok) { console.error('FAIL place notes'); process.exit(1); } console.log('ok place notes'); }
+console.log(fails ? `${fails} FAILED` : 'nurses ok'); process.exit(fails ? 1 : 0);

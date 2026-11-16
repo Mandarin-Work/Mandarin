@@ -1,0 +1,119 @@
+// Everything that arrives from other apps goes through here: never trust the shape, cap everything, and say what was ignored.
+// The contract lives in HUB.md. A status.json can carry (all optional):
+//   summary, next, today{date,done}, asks[], pending[]            — what Citrus already understood
+//   metrics[{key,label,value,goal,unit,date}]                      — today's numbers (cards reviewed, sets lifted…); history is kept by Citrus
+//   progress[{key,label,pct}]                                      — long-run progress (German A2: 62 %), can drive an objective
+//   inbox[{id,type,title,text,due|date,start,end,minutes,pri,url}] — things the app proposes: tasks, events, notes. You accept or dismiss.
+import { safeUrl } from './util.js';
+
+export const CONTRACT = 2;
+const DATE = /^\d{4}-\d{2}-\d{2}$/, TIME = /^([01]\d|2[0-3]):[0-5]\d$/, SLUG = /[^a-z0-9_-]+/g;
+const CAP = { asks: 30, pending: 10, metrics: 12, progress: 12, inbox: 25, actions: 6 };
+
+const validDate = (v) => typeof v === 'string' && DATE.test(v) && !isNaN(new Date(v + 'T00:00:00'));
+export const slug = (v) => String(v ?? '').toLowerCase().trim().replace(SLUG, '-').replace(/^-+|-+$/g, '').slice(0, 40);
+export const refOf = (app, id) => `${app}:${id}`;
+
+// An app's icon: one emoji (flags and ZWJ sequences stay whole) or a monogram of up to 2 letters. Cut by graphemes, never by
+// UTF-16 units, so no half emoji or lone surrogate ever reaches the avatar.
+const seg = typeof Intl !== 'undefined' && Intl.Segmenter ? new Intl.Segmenter(undefined, { granularity: 'grapheme' }) : null;
+const graphemes = (s) => (seg ? [...seg.segment(s)].map(x => x.segment) : Array.from(s));
+export function iconOf(v) {
+  const s = (typeof v === 'string' ? v : v == null ? '' : String(v)).replace(/[\uD800-\uDFFF]/g, (c, i, all) => {   // drop lone surrogates
+    const hi = c.charCodeAt(0) < 0xDC00; return (hi ? /[\uDC00-\uDFFF]/.test(all[i + 1] || '') : /[\uD800-\uDBFF]/.test(all[i - 1] || '')) ? c : '';
+  }).trim();
+  if (!s) return '';
+  const g = graphemes(s);
+  return /^[\p{L}\p{N}]$/u.test(g[0]) ? g.slice(0, 2).filter(x => /^[\p{L}\p{N}]$/u.test(x)).join('') : g[0];
+}
+
+/** A clean copy of a status file, keyed by the lowercase app name. Returns null if it isn't an object at all.
+ *  `issues` lists what was ignored, so an app's author can see exactly what Citrus did with the file. */
+export function normalizeStatus(st, fallbackName = '') {
+  if (!st || typeof st !== 'object' || Array.isArray(st)) return null;
+  const issues = [];
+  const str = (v, max = 300) => (typeof v === 'string' ? v : v == null ? '' : String(v)).slice(0, max);
+  const app = slug(st.app || st._folder || fallbackName);
+  if (!app) return null;
+  const list = (v, name) => { if (v == null) return []; if (!Array.isArray(v)) { issues.push(`${name}: expected a list, ignored`); return []; } if (v.length > CAP[name]) issues.push(`${name}: only the first ${CAP[name]} of ${v.length} are read`); return v.slice(0, CAP[name]); };
+  const updatedAt = !isNaN(Date.parse(st.updatedAt)) ? new Date(st.updatedAt).toISOString() : '';
+  if (!updatedAt) issues.push('updatedAt: missing or not an ISO time — Citrus cannot tell how fresh this is');
+  const today = st.today && typeof st.today === 'object' ? { done: !!st.today.done, date: validDate(st.today.date) ? st.today.date : '' } : null;
+  const dayOf = (v) => validDate(v) ? v : today?.date || (updatedAt ? updatedAt.slice(0, 10) : '');
+
+  const asks = list(st.asks, 'asks').filter((a, i) => { const ok = a && typeof a === 'object' && validDate(a.date); if (!ok) issues.push(`asks[${i}]: needs a date like 2026-11-07, ignored`); return ok; })
+    .map(a => ({ date: a.date, title: str(a.title, 80), minutes: Math.max(0, Math.min(240, +a.minutes || 0)), slot: a.slot === 'before' ? 'before' : 'free' }));
+  const pending = (Array.isArray(st.pending) ? st.pending : typeof st.pending === 'string' ? [st.pending] : []).map(p => str(p, 120)).filter(Boolean).slice(0, CAP.pending);
+
+  const metrics = list(st.metrics, 'metrics').map((m, i) => {
+    const key = slug(m?.key), value = Number(m?.value);
+    if (!key || !Number.isFinite(value)) { issues.push(`metrics[${i}]: needs a key and a numeric value, ignored`); return null; }
+    return { key, label: str(m.label || m.key, 40), value, goal: Number.isFinite(+m.goal) && +m.goal > 0 ? +m.goal : 0, unit: str(m.unit, 12), date: dayOf(m.date) };
+  }).filter(m => m && m.date);
+  const progress = list(st.progress, 'progress').map((p, i) => {
+    const key = slug(p?.key), pct = Number(p?.pct);
+    if (!key || !Number.isFinite(pct)) { issues.push(`progress[${i}]: needs a key and pct 0–100, ignored`); return null; }
+    return { key, label: str(p.label || p.key, 40), pct: Math.max(0, Math.min(100, pct)), date: dayOf(p.date) };
+  }).filter(p => p && p.date);
+
+  // deep links: buttons Citrus shows for the app ("Start reviews"), opened with ?from=citrus appended
+  const aseen = new Set();
+  const actions = list(st.actions, 'actions').map((a, i) => {
+    const id = slug(a?.id), url = safeUrl(a?.url), label = str(a?.label, 28).trim();
+    if (!id || !url || !label || aseen.has(id)) { issues.push(`actions[${i}]: needs id, label and an http(s) url, ignored`); return null; }
+    aseen.add(id); return { id, label, url, icon: iconOf(a.icon), minutes: Math.max(0, Math.min(240, Math.round(+a.minutes || 0))) };
+  }).filter(Boolean);
+
+  const seen = new Set();
+  const inbox = list(st.inbox, 'inbox').map((it, i) => {
+    if (!it || typeof it !== 'object') { issues.push(`inbox[${i}]: not an object, ignored`); return null; }
+    const id = slug(it.id); if (!id) { issues.push(`inbox[${i}]: needs a stable id (so it is not offered twice), ignored`); return null; }
+    if (seen.has(id)) { issues.push(`inbox[${i}]: duplicate id "${id}", ignored`); return null; }
+    seen.add(id);
+    const type = ['task', 'event', 'note', 'posting', 'swap', 'nurse'].includes(it.type) ? it.type : 'task';
+    // posting: nurse postings someone told you about (e.g. sent by Claude from a screenshot) — {date, from, site?, postings:[{nurse, site?}]};
+    // site "mine" (or none) = your own site that day. Accepting saves them as "heard" tips, never as confirmed posts.
+    if (type === 'posting') {
+      const date = validDate(it.date) ? it.date : ''; if (!date) { issues.push(`inbox[${i}] "${id}": a posting needs a date, ignored`); return null; }
+      const postings = (Array.isArray(it.postings) ? it.postings : []).slice(0, 40).map(p => ({ nurse: str(p?.nurse, 60).trim(), site: str(p?.site || it.site || 'mine', 30).trim() })).filter(p => p.nurse);
+      if (!postings.length) { issues.push(`inbox[${i}] "${id}": a posting needs postings[{nurse}], ignored`); return null; }
+      return { id, type, title: str(it.title, 120).trim() || `Nurse postings for ${date}`, text: str(it.text, 400), date, from: str(it.from, 40).trim(), postings, expires: validDate(it.expires) ? it.expires : '', pri: 0, minutes: 0, start: '', end: '', url: '' };
+    }
+    // nurse: something you told Claude about a nurse — {nurse (a name as you say it), canLead: true|false}. Accepting marks her on the nurse board.
+    if (type === 'nurse') {
+      const nurse = str(it.nurse, 60).trim(); if (!nurse || typeof it.canLead !== 'boolean') { issues.push(`inbox[${i}] "${id}": a nurse item needs {nurse, canLead}, ignored`); return null; }
+      return { id, type, title: str(it.title, 120).trim() || `${nurse} can be team leader`, text: str(it.text, 400), date: '', nurse, canLead: it.canLead, from: str(it.from, 40).trim(), expires: '', pri: 0, minutes: 0, start: '', end: '', url: '' };
+    }
+    // swap: a shift change for one of your days — {date, code (the legend code you work instead, '' = off), with (colleague), note}. Accepting writes your day correction.
+    if (type === 'swap') {
+      const date = validDate(it.date) ? it.date : ''; if (!date) { issues.push(`inbox[${i}] "${id}": a swap needs a date, ignored`); return null; }
+      return { id, type, title: str(it.title, 120).trim() || `Shift swap on ${date}`, text: str(it.text, 400), date, code: str(it.code, 12).trim(), with: str(it.with, 60).trim(), note: str(it.note, 120).trim(), from: str(it.from, 40).trim(), expires: '', pri: 0, minutes: 0, start: '', end: '', url: '' };
+    }
+    const title = str(it.title || (type === 'note' ? it.text : ''), 120).trim();
+    if (!title) { issues.push(`inbox[${i}] "${id}": needs a title, ignored`); return null; }
+    const date = validDate(it.date) ? it.date : validDate(it.due) ? it.due : '';
+    if (type === 'event' && !date) { issues.push(`inbox[${i}] "${id}": an event needs a date, ignored`); return null; }
+    const expires = validDate(it.expires) ? it.expires : '';
+    return { id, type, title, text: str(it.text, 400), date, start: TIME.test(it.start || '') ? it.start : '', end: TIME.test(it.end || '') ? it.end : '', minutes: Math.max(0, Math.min(480, Math.round(+it.minutes || 0))), pri: Math.max(0, Math.min(2, Math.round(+it.pri || 0))), url: safeUrl(it.url), expires };
+  }).filter(Boolean);
+
+  return {
+    app, title: str(st.title, 40), icon: iconOf(st.icon), color: /^#[0-9a-f]{3,8}$/i.test(st.color || '') ? st.color : '', url: safeUrl(st.url || st.extra?.url),
+    summary: str(st.summary), updatedAt, asks, pending, metrics, progress, inbox, actions, issues,
+    next: st.next && typeof st.next === 'object' ? { title: str(st.next.title, 80), minutes: Math.max(0, +st.next.minutes || 0) } : null,
+    today,
+    // counts shown in badges: whole, 0–999 (one app sending 5000 must not take over the header); minutes up to a day
+    due: st.due != null && st.due !== '' && Number.isFinite(+st.due) ? Math.max(0, Math.min(999, Math.round(+st.due))) : undefined,
+    estimatedMinutes: st.estimatedMinutes != null && st.estimatedMinutes !== '' && Number.isFinite(+st.estimatedMinutes) ? Math.max(0, Math.min(1440, Math.round(+st.estimatedMinutes))) : undefined,
+    extra: st.extra && typeof st.extra === 'object' ? { streak: +st.extra.streak || undefined } : {},
+  };
+}
+
+/** For the "paste a status.json" tester: what Citrus would read from this text. */
+export function validateStatus(text) {
+  let json;
+  try { json = JSON.parse(text); } catch (e) { return { ok: false, error: `Not valid JSON: ${e.message}`, issues: [] }; }
+  const parsed = normalizeStatus(json, json?.app || 'app');
+  if (!parsed) return { ok: false, error: 'It must be a JSON object with an "app" name.', issues: [] };
+  return { ok: !parsed.issues.length, parsed, issues: parsed.issues };
+}
