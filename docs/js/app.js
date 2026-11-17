@@ -34,7 +34,7 @@ import { shiftsIcs } from './ics.js';
 import { checkBackup, describeCounts } from './backup-check.js';
 import { h, toast, keyOf, fromKey, addDays, startOfDay, sameDay, fmtDate, fmtDateShort, fmtTime, fmtMin, fmtDur, relDay, pad2, DAY_SHORT, DAY_NAMES, MONTHS, telLink, firstName, atMin, minsOf, uid } from './util.js';
 
-export const VERSION = '1.0.0';
+export const VERSION = '1.1.0';
 const CITRUS_URL = 'https://amaerys.github.io/citrus-maxima/';
 const CLEMENTINE_URL = 'https://clementine-social.github.io/Clementine/';
 
@@ -698,7 +698,7 @@ async function syncHub({ full = false } = {}) {
   rt.hub.claude = claude?.data || null; rt.hub.citrusPlan = plan?.data || null; rt.hub.at = Date.now();
   // the first time, or twice a day: take over the work parts of Citrus (once), and refresh the read-only contact cards
   if (full || !S().migrated || Date.now() - DIR.syncedAt() > 12 * 3600000) {
-    const clem = await G.readOtherFile(root, 'clementine', 'state.json').catch(() => null);
+    const clem = (await G.readOtherFile(root, 'clementine', 'contacts.json').catch(() => null)) || (await G.readOtherFile(root, 'clementine', 'state.json').catch(() => null));
     const citrus = clem ? null : await G.readOtherFile(root, 'citrus', 'state.json').catch(() => null);
     if (clem?.data) DIR.ingest(clem.data, 'clementine'); else if (citrus?.data) DIR.ingest(citrus.data, 'citrus');
     if (!S().migrated && citrus?.data) offerMigration(citrus.data, 'Citrus on Drive');

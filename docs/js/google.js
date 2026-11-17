@@ -236,9 +236,9 @@ function persistIds() { try { localStorage.setItem(IDS_KEY, JSON.stringify(ids))
 const verified = new Set();       // ids confirmed to exist this session
 export function knownFolderIds() { return { ...ids }; }
 /** Check every cached folder id again on next use (a full sync does this). */
-export function reverify() { verified.clear(); }
+export function reverify() { verified.clear(); tagChecked.clear(); }
 /** Forget every cached id (a watched folder was deleted or moved): paths are looked up again, created if missing. */
-export function forgetFolders() { ids = {}; persistIds(); verified.clear(); seenState = null; }
+export function forgetFolders() { ids = {}; persistIds(); verified.clear(); tagChecked.clear(); seenState = null; }
 
 const FIELDS = 'id,name,mimeType,createdTime,modifiedTime,size,md5Checksum,appProperties,parents,trashed';
 async function list(parentId, { name, folders, extra, all } = {}) {
@@ -377,16 +377,65 @@ export async function changesSince(tokenStr, maxPages = 20) {
 export const APP = 'mandarin';
 const P = (root) => ({ rotas: [root, 'Rotas'], hub: [root, 'hub'], me: [root, 'hub', APP], backups: [root, 'hub', APP, 'backups'], other: (app) => [root, 'hub', app] });
 
+// ════════════════════════════════════════ folders found by tag (claude/drive-layout.md, 17/11/2026)
+// Every app folder carries appProperties.citrusApp = "<id>". Citrus may move and rename them into Citrus/…; a tag survives that,
+// a path does not. Mandarin never moves or renames a folder: it only follows the tag.
+export const BY_TAG = true;
+const TAG_PATH = { mandarin: (r) => P(r).me, rotas: (r) => P(r).rotas };           // the old place, for an untagged Drive
+const OWN_TAGS = new Set(['mandarin', 'rotas']);                                    // folders Mandarin may create (and tag) itself
+const tagChecked = new Set(), tagInflight = new Map();
+export const tagStats = { byTag: {}, fallback: {} };
+async function taggedFolder(tag) {
+  const p = new URLSearchParams({ q: `mimeType = '${FOLDER}' and trashed = false and appProperties has { key='citrusApp' and value='${q(tag)}' }`, fields: 'files(id,name,parents,createdTime)', spaces: 'drive', pageSize: '20' });
+  const j = await gfetch(`${DRIVE}/files?${p}`);
+  return (j.files || []).sort((a, b) => (a.createdTime || '').localeCompare(b.createdTime || ''))[0] || null;   // twins: the oldest
+}
+async function tagIt(id, tag) {
+  await gfetch(`${DRIVE}/files/${encodeURIComponent(id)}?fields=id`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ appProperties: { citrusApp: tag } }) });
+}
+/** The folder for an app id ('mandarin', 'rotas', 'citrus', 'claude', 'clementine' …): by tag first, checked once a session;
+ *  otherwise the old path My Apps/hub/<id> (My Apps/Rotas). Mandarin's own folders are created there and tagged at once;
+ *  another app's folder is never created. Never creates by path once a tagged folder exists anywhere. */
+export function appFolder(root, tag, { create = OWN_TAGS.has(tag) } = {}) {
+  const key = `tag:${tag}`;
+  if (tagChecked.has(tag)) { if (ids[key]) return Promise.resolve(ids[key]); if (!create) return Promise.resolve(null); }
+  const flight = `${tag}${create ? '' : '?'}`;
+  if (tagInflight.has(flight)) return tagInflight.get(flight);
+  const run = (async () => {
+    const t = await taggedFolder(tag);
+    if (t) { ids[key] = t.id; verified.add(t.id); persistIds(); tagChecked.add(tag); tagStats.byTag[tag] = t.id; return t.id; }
+    const path = (TAG_PATH[tag] || ((r) => P(r).other(tag)))(root);
+    const id = await ensurePath(path, { create: create && OWN_TAGS.has(tag) });
+    if (id && OWN_TAGS.has(tag)) { await tagIt(id, tag).catch(e => console.warn('tag folder', tag, e.message)); ids[key] = id; persistIds(); tagChecked.add(tag); tagStats.byTag[tag] = id; }
+    else { tagChecked.add(tag); if (id) { tagStats.fallback[tag] = id; ids[key] = id; } else delete ids[key]; persistIds(); }   // not ours to tag: Citrus tags it; looked up again next full sync
+    return id || null;
+  })().finally(() => tagInflight.delete(flight));
+  tagInflight.set(flight, run);
+  return run;
+}
+/** A sub-folder (backups/) inside a folder found by id, created where missing. */
+async function subFolder(parentId, name, create = true) {
+  const key = `${parentId}/${name}`;
+  if (ids[key] && await exists(ids[key])) return ids[key];
+  const found = (await list(parentId, { name, folders: true })).sort((a, b) => (a.createdTime || '').localeCompare(b.createdTime || ''))[0];
+  const id = found ? found.id : create ? await mkdir(name, parentId) : null;
+  if (id) { ids[key] = id; verified.add(id); persistIds(); }
+  return id;
+}
+const meDir = (root) => appFolder(root, APP);
+const rotasDir = (root) => appFolder(root, 'rotas');
+const backupsDir = async (root, create = true) => { const me = await meDir(root); return me ? subFolder(me, 'backups', create) : null; };
+
 /** Folder ids Mandarin watches in the changes feed: the rotas, its own folder, and the folders of the apps it reads. */
 export async function watchedFolders(root) {
-  const [rotas, hub, me] = await Promise.all([ensurePath(P(root).rotas), ensurePath(P(root).hub), ensurePath(P(root).me)]);
-  const [citrus, claude] = await Promise.all([ensurePath(P(root).other('citrus'), { create: false }), ensurePath(P(root).other('claude'), { create: false })]);
-  return { rotas, hub, me, citrus: citrus || '', claude: claude || '' };
+  const [rotas, me] = await Promise.all([rotasDir(root), meDir(root)]);
+  const [citrus, claude, clementine, hub] = await Promise.all(['citrus', 'claude', 'clementine'].map(t => appFolder(root, t, { create: false }).catch(() => null)).concat(ensurePath(P(root).hub, { create: false }).catch(() => null)));
+  return { rotas, hub: hub || '', me, citrus: citrus || '', claude: claude || '', clementine: clementine || '' };
 }
 
 // Rotas: every spreadsheet (Google Sheets are exported as xlsx)
 export async function listRotaFiles(root) {
-  const id = await ensurePath(P(root).rotas);
+  const id = await rotasDir(root);
   const files = await list(id, { extra: `(mimeType='${XLSX}' or mimeType='${GSHEET}' or name contains '.xlsx')` });
   return files.map(f => ({ ...f, size: +f.size || 0, folderId: id }));
 }
@@ -395,7 +444,7 @@ export async function downloadRota(f) {
   return downloadFile(f.id);
 }
 export async function uploadRota(root, name, blob, fileId = null) {
-  const dir = await ensurePath(P(root).rotas);
+  const dir = await rotasDir(root);
   const boundary = 'mandarin' + Date.now().toString(36);
   const meta = fileId ? { name } : { name, parents: [dir], mimeType: XLSX };
   const body = new Blob([`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n--${boundary}\r\nContent-Type: ${XLSX}\r\n\r\n`, blob, `\r\n--${boundary}--`]);
@@ -405,11 +454,11 @@ export async function uploadRota(root, name, blob, fileId = null) {
 }
 
 /** Mandarin's small public files in hub/mandarin: status.json (what Citrus shows) and shifts.json (what every app reads). */
-export async function writeOwnFile(root, name, obj, { omit = ['updatedAt'] } = {}) { const dir = await ensurePath(P(root).me); return putJson(dir, name, obj, { omit, healTwins: true }); }
+export async function writeOwnFile(root, name, obj, { omit = ['updatedAt'] } = {}) { const dir = await meDir(root); return putJson(dir, name, obj, { omit, healTwins: true }); }
 
 /** Another app's JSON file, read only: hub/<app>/<name>. null when it is not there. Twins are left alone (not ours to tidy). */
 export async function readOtherFile(root, app, name) {
-  const dir = await ensurePath(P(root).other(app), { create: false }); if (!dir) return null;
+  const dir = await appFolder(root, app, { create: false }); if (!dir) return null;
   const { file } = await findFile(dir, name); if (!file) return null;
   const data = await readJsonFile(file);
   return data && typeof data === 'object' ? { data, modifiedTime: file.modifiedTime, id: file.id } : null;
@@ -418,7 +467,7 @@ export async function readOtherFile(root, app, name) {
 // ── Mandarin's own state: read with its revision, written only if nobody else wrote it since
 let seenState = null;   // {id, rev, modifiedTime} of the state.json we last read or wrote
 export async function loadRemoteState(root) {
-  const dir = await ensurePath(P(root).me);
+  const dir = await meDir(root);
   const { file, twins } = await findFile(dir, 'state.json');
   if (!file) { seenState = null; return null; }
   for (const t of twins) trash(t.id).catch(() => {});
@@ -443,7 +492,7 @@ export async function remoteStateMoved() {
   catch (e) { if (e.status === 404) return true; throw e; }
 }
 export async function saveRemoteState(root, state, { force = false } = {}) {
-  const dir = await ensurePath(P(root).me);
+  const dir = await meDir(root);
   if (!force && await remoteStateMoved()) { const e = new GoogleError('Another device saved first.', { status: 409 }); e.conflict = true; throw e; }
   const rev = `${Date.now().toString(36)}.${Math.random().toString(36).slice(2, 7)}`;
   const r = await putJson(dir, 'state.json', state, { props: { rev }, fileId: seenState?.id || null, always: force });
@@ -454,7 +503,7 @@ export function seenStateRev() { return seenState?.rev || ''; }
 
 // ── daily backups of state.json: hub/mandarin/backups/state-YYYY-MM-DD.json, the newest 14 kept
 export async function backupDaily(root, state, dayKey) {
-  const dir = await ensurePath(P(root).backups);
+  const dir = await backupsDir(root);
   const name = `state-${dayKey}.json`, size = JSON.stringify(state).length;
   // today's copy is taken again when the data has grown a lot since (the first sync of day one was an empty 717 B: beta T5-07)
   const had = +ids[`backup:${name}`] || 0;
@@ -471,12 +520,12 @@ export async function backupDaily(root, state, dayKey) {
 }
 /** A copy kept just before a risky step (migration, restore, replace): hub/mandarin/backups/state-YYYY-MM-DD-before-<what>.json. */
 export async function backupBefore(root, state, what) {
-  const dir = await ensurePath(P(root).backups);
+  const dir = await backupsDir(root);
   const d = new Date(), p2 = (n) => String(n).padStart(2, '0');
   await putJson(dir, `state-${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}-before-${what}-${p2(d.getHours())}${p2(d.getMinutes())}.json`, state);
 }
 export async function listBackups(root) {
-  const dir = await ensurePath(P(root).backups, { create: false }); if (!dir) return [];
+  const dir = await backupsDir(root, false); if (!dir) return [];
   return (await list(dir, { extra: "name contains 'state-'" })).sort((a, b) => b.name.localeCompare(a.name)).map(f => ({ id: f.id, name: f.name, date: f.name.slice(6, 16), size: +f.size || 0 }));
 }
 export async function readBackup(id) { return readJsonFile({ id }); }

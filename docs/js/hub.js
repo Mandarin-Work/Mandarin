@@ -98,6 +98,7 @@ export function buildStatus(s, now = new Date(), extra = {}) {
   const doneToday = !today || today.kind !== 'work' || (md.today && now >= md.today.window.end && !!s.shiftLog?.[keyOf(now)]);
   return {
     app: 'mandarin', title: 'Mandarin', icon: '🍊', color: '#ff8a1f', url: base, contract: CONTRACT,
+    drive: { byTag: true },   // Mandarin finds its folders by appProperties.citrusApp: Citrus may move them (claude/drive-layout.md)
     updatedAt: now.toISOString(),
     summary: bits.join(' · ').slice(0, 140),
     today: { date: keyOf(now), done: !!doneToday },

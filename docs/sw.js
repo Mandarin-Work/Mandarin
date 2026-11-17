@@ -1,6 +1,6 @@
 // Mandarin service worker: precached app shell, network-first with a short timeout, Google Fonts cached for offline,
 // and the share target: rota files shared from WhatsApp or Files arrive as a POST to ./share, are kept for one read, and the app imports them.
-const CACHE = 'mandarin-39f6fa4552';
+const CACHE = 'mandarin-6c640b642e';
 const FONTS = 'mandarin-fonts-v1';
 const SHARE = 'mandarin-share';   // files shared to the app, read once by the page   // kept across releases: font files are immutable, no need to fetch them again
 const FONT_CSS = 'https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700;800&family=Pixelify+Sans:wght@500;700&family=Source+Sans+3:wght@400;600;700&family=JetBrains+Mono:wght@500&display=swap';
