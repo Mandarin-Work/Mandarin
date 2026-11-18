@@ -43,8 +43,13 @@ export function h(tag, attrs = {}, ...children) {
   }
   // a row that opens something works from the keyboard and reads as a button, like a real <button> (beta T6-01)
   if (attrs?.onClick && !/^(button|a|input|select|textarea|label|summary|option)$/i.test(tag) && !el.hasAttribute('tabindex') && /\b(clickable|dir-item|tw-row|sw-opt|np-who)\b/.test(el.className)) {
-    el.tabIndex = 0; if (!el.hasAttribute('role')) el.setAttribute('role', 'button');
-    el.addEventListener('keydown', (e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target === el) { e.preventDefault(); el.click(); } });
+    // a row that holds its own buttons (call, WhatsApp) can't be a button itself: its main part is, and a tap there opens the row
+    const inner = el.querySelector('button, a[href], input, select, textarea');
+    const target = inner ? ([...el.children].find(c => c.classList.contains('grow') && !c.querySelector('button, a[href], input')) || [...el.children].find(c => !c.matches('button, a, input') && !c.querySelector('button, a[href], input'))) : el;
+    if (target) {
+      target.tabIndex = 0; if (!target.hasAttribute('role')) target.setAttribute('role', 'button');
+      target.addEventListener('keydown', (e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target === target) { e.preventDefault(); target.click(); } });
+    }
   }
   return el;
 }

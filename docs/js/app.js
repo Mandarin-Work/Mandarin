@@ -34,7 +34,9 @@ import { shiftsIcs } from './ics.js';
 import { checkBackup, describeCounts } from './backup-check.js';
 import { h, toast, keyOf, fromKey, addDays, startOfDay, sameDay, fmtDate, fmtDateShort, fmtTime, fmtMin, fmtDur, relDay, pad2, DAY_SHORT, DAY_NAMES, MONTHS, telLink, firstName, atMin, minsOf, uid } from './util.js';
 
-export const VERSION = '1.1.0';
+export const VERSION = '1.2.0';
+/** Uses the owner's other apps (Citrus, the Claude inbox)? Someone using Mandarin on its own never sees Citrus buttons or wording. */
+const family = () => !!(rt.fromCitrus || S().settings.family || (S().migrated && S().migrated.from !== 'skipped'));
 const CITRUS_URL = 'https://amaerys.github.io/citrus-maxima/';
 const CLEMENTINE_URL = 'https://clementine-social.github.io/Clementine/';
 
@@ -696,6 +698,7 @@ async function syncHub({ full = false } = {}) {
   const root = S().settings.driveFolder;
   const [claude, plan] = await Promise.all([G.readOtherFile(root, 'claude', 'status.json').catch(() => null), G.readOtherFile(root, 'citrus', 'plan.json').catch(() => null)]);
   rt.hub.claude = claude?.data || null; rt.hub.citrusPlan = plan?.data || null; rt.hub.at = Date.now();
+  if ((claude?.data || plan?.data) && !S().settings.family) store.update(x => ({ ...x, settings: { ...x.settings, family: true } }));
   // the first time, or twice a day: take over the work parts of Citrus (once), and refresh the read-only contact cards
   if (full || !S().migrated || Date.now() - DIR.syncedAt() > 12 * 3600000) {
     const clem = (await G.readOtherFile(root, 'clementine', 'contacts.json').catch(() => null)) || (await G.readOtherFile(root, 'clementine', 'state.json').catch(() => null));
@@ -809,6 +812,7 @@ function renderToday() {
   const TOP = cz.today.top + ranked.filter(r => cz.today.pinned.includes(r.label)).length, top = ranked.slice(0, TOP), rest = ranked.slice(TOP);
   main.push(...top.map(r => r.el));
   if (rest.length) main.push(h('details', { class: 'more-today', open: getUi()[UI_MORE] ? '' : null, onToggle: (e) => { try { localStorage.setItem(UI_KEY, JSON.stringify({ ...getUi(), [UI_MORE]: e.currentTarget.open })); } catch {} } }, h('summary', {}, h('span', { class: 'title' }, 'More for today'), h('span', { class: 'chips' }, rest.map(r => h('span', { class: 'chip' }, r.label)))), ...rest.map(r => r.el)));
+  { const ic = iosCard(loaded); if (ic) (loaded ? side : main).push(ic); }   // after the day's own cards, never above them
   if (!cz.today.hidden.includes('Calendar')) side.push(eventsCard(now));
   { const fv = favCard(now); if (fv) side.push(fv); }
   if (wide) return h('div', { class: 'cockpit' }, h('div', { class: 'ck-col' }, ...main),
@@ -966,7 +970,10 @@ function dayDial(date) {
   const labels = [0, 6, 12, 18].map(hh => { const [x, y] = pt(rOuter - w - 16, hh * 60); return el('text', { x, y: y + 3.5, 'text-anchor': 'middle', 'font-size': 9, fill: 'var(--dim)' }, String(hh)); });
   // now marker
   const nowMin = sameDay(date, new Date()) ? minsOf(new Date()) : null;
-  const marker = nowMin == null ? null : (() => { const [x1, y1] = pt(rOuter - w / 2 - 3, nowMin), [x2, y2] = pt(rOuter + w / 2 + 3, nowMin); return el('line', { x1, y1, x2, y2, stroke: 'var(--orange)', 'stroke-width': 3, 'stroke-linecap': 'round', class: 'now' }); })();
+  const marker = nowMin == null ? null : (() => { const [x1, y1] = pt(rOuter - w / 2 - 3, nowMin), [x2, y2] = pt(rOuter + w / 2 + 3, nowMin); // the pip: the family's "now" mark, a small seed sitting on the ring and pointing out from the centre
+    const [px, py] = pt(rOuter + w / 2 + 7, nowMin), deg = (nowMin / 1440) * 360;
+    return el('g', { class: 'now' }, el('line', { x1, y1, x2, y2, stroke: 'var(--orange)', 'stroke-width': 3, 'stroke-linecap': 'round' }),
+      el('path', { class: 'pip', d: 'M0 -6.5C3.6 -6.5 4.8 -1.5 3.9 2.4C3.2 5.6 -3.2 5.6 -3.9 2.4C-4.8 -1.5 -3.6 -6.5 0 -6.5Z', transform: `translate(${px.toFixed(1)} ${py.toFixed(1)}) rotate(${deg.toFixed(1)})` })); })();
   // the centre names the shift you are on now: last night's until it ends, then today's (beta T10-02: 03:00 mid-night said "post-night")
   const nowD = new Date(), tailLive = overnightTail && sameDay(date, nowD) && nowD < overnightTail.window.end, cur = tailLive ? overnightTail : today;
   const nh = !cur ? myDay(s, date).noHours : null, done = cur && !tailLive && nowD >= shiftWindow(date, today.shift).end;
@@ -1129,15 +1136,33 @@ function shiftBoard(info, md = null) {
     m.rows.some(r => r.prev) ? h('div', { class: 'tiny dim bd-foot' }, 'Hatched bars started yesterday evening.') : null);
 }
 
+// ── iPhone: no share sheet into web apps, and installing is a manual step, so say how
+const isIOS = () => /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const isStandalone = () => window.matchMedia?.('(display-mode: standalone)').matches || navigator.standalone === true;
+function iosCard(loaded) {
+  if (!isIOS()) return null;
+  const ui = getUi(), installed = isStandalone();
+  if (loaded && (installed || ui.iosHint === 'off')) return null;
+  return h('div', { class: 'card ios-card' }, h('div', { class: 'ios-ic', 'aria-hidden': 'true' }, '📱'),
+    h('div', { class: 'grow' }, h('div', { class: 'title' }, 'On iPhone'),
+      h('ol', { class: 'small' },
+        installed ? null : h('li', {}, 'Add Mandarin to your Home Screen: tap Share ', h('b', {}, '⬆'), ' at the bottom of Safari, then ', h('b', {}, 'Add to Home Screen'), '. It then opens full screen, like an app.'),
+        h('li', {}, 'Rota from WhatsApp: open the file, tap Share ', h('b', {}, '⬆'), ' › ', h('b', {}, 'Save to Files'), ', then ', h('b', {}, 'Import'), ' here and pick it from Files.')),
+      loaded ? h('button', { class: 'btn sm ghost', style: { marginTop: '6px' }, onClick: () => { setUi({ iosHint: 'off' }); render(); } }, 'Got it') : null));
+}
+
 /** First run: one card, three steps (import → pick your row → sign in), instead of four "import" calls on one screen (beta T10-17). */
 function onboardingCard() {
-  const dz = h('div', { class: 'dropzone' }, h('div', {}, 'Drop your rota .xlsx files here'), h('div', { class: 'small', style: { marginTop: '8px' } }, importButton()));
+  const touch = matchMedia('(pointer: coarse)').matches;
+  const dz = h('div', { class: 'dropzone' }, h('div', {}, touch ? 'Your rota file (.xlsx)' : 'Drop your rota .xlsx files here'), h('div', { class: 'small', style: { marginTop: '8px' } }, importButton()));
   dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('over'); });
   dz.addEventListener('dragleave', () => dz.classList.remove('over'));
   dz.addEventListener('drop', e => { e.preventDefault(); dz.classList.remove('over'); importFiles([...e.dataTransfer.files]); });
   const step = (n, title, sub, done = false) => h('li', { class: `ob-step ${done ? 'done' : ''}` }, h('span', { class: 'ob-n' }, done ? '✓' : n), h('div', {}, h('b', {}, title), h('div', { class: 'tiny dim' }, sub)));
-  return h('div', { class: 'card onboard' }, h('div', { class: 'title' }, 'Get started'),
-    h('ol', { class: 'ob-steps' }, step(1, 'Import your rota', 'The GP rota .xlsx; add FSED, Upper Village and nurses if you have them.'), step(2, 'Pick your row', 'Mandarin asks which person in the rota is you.'), step(3, 'Sign in with Google', 'Settings › Google: rotas in Drive › My Apps › Rotas import by themselves, and your work from Citrus comes over.', G.isSignedIn())),
+  return h('div', { class: 'card onboard' },
+    h('div', { class: 'ob-hero' }, h('div', { class: 'ob-mark', 'aria-hidden': 'true' }), h('div', {}, h('h2', {}, 'Welcome to Mandarin'), h('p', { class: 'small muted' }, 'Your shifts, your team, your month and your career, all from the rota you already get.'))),
+    h('ol', { class: 'ob-steps' }, step(1, 'Import your rota', 'The monthly rota .xlsx, as it comes on WhatsApp. Add the nurses’ and specialists’ sheets too if you have them.'), step(2, 'Pick your row', 'Mandarin asks which person in the rota is you.'), step(3, 'Sign in with Google (optional)', family() ? 'Settings › Google: rotas dropped in Drive import by themselves, and your work from Citrus comes over.' : 'Settings › Google: your shifts in your calendar, and your data kept safe in your own Drive.', G.isSignedIn())),
+    h('p', { class: 'tiny dim ob-privacy' }, '🔒 Your data stays on this device and, if you sign in, in your own Google Drive. Nobody else, not even the person who made Mandarin, can see it.'),
     // after "Not now" the work may still be in Citrus: one line to bring it over (T5-15)
     S().migrated?.from === 'skipped' && (rt.signedIn || S().google?.connected) ? h('div', { class: 'small', style: { margin: '6px 0' } }, 'Your rotas may still be in Citrus. ', h('button', { class: 'linkish', onClick: () => migrateNow() }, 'Bring them over')) : null,
     dz);
@@ -1353,7 +1378,7 @@ function daySheet(date) {
   if (info.off.length) content.push(h('div', { class: 'card' }, h('div', { class: 'title' }, `Off today (${info.off.length})`), h('div', { class: 'people' }, ...info.off.map(e => personPill(e)))));
   const evs = rt.events[k] || [];
   const plan = citrusBlocks(date);
-  if (evs.length || plan.length) content.push(h('div', { class: 'card' }, h('div', { class: 'title' }, 'Calendar & Citrus plan'),
+  if (evs.length || plan.length) content.push(h('div', { class: 'card' }, h('div', { class: 'title' }, plan.length ? 'Calendar and plan' : 'Calendar'),
     ...evs.map(ev => h('div', { class: 'row small', style: { padding: '4px 0' } }, h('b', {}, ev.allDay ? 'all day' : fmtTime(ev.start)), h('span', {}, ev.title))),
     ...plan.map(p => h('div', { class: 'row small', style: { padding: '4px 0' } }, h('b', {}, fmtMin(p.start)), h('span', {}, p.title), h('span', { class: 'tiny dim' }, p.app ? ` · ${p.app}` : '')))));
   // the after-shift log for this day: rating, counts, note
@@ -1362,7 +1387,7 @@ function daySheet(date) {
   if (info.mine?.swap) { const sw = info.mine.swap, kd = SW.kindOf(sw), who = sw.with ? { swap: `swapped with ${sw.with}`, gave: `you covered ${sw.with}`, got: `${sw.with} covered you` }[kd] || `with ${sw.with}` : '';
     content.splice(1, 0, h('div', { class: 'row small sw-line', style: { margin: '6px 0 10px' } }, h('span', { class: `chip sw-k ${kd}` }, SW.KIND_LABEL[kd]), h('span', { class: 'muted' }, [`rota: ${raw || 'off'}`, who, sw.note].filter(Boolean).join(' · ')))); }
   // cover is for days ahead (beta T02-02); a correction needs your row in the rota
-  content.push(h('div', { class: 'row wrap' }, h('a', { class: 'btn grow', href: `${CITRUS_URL}?from=mandarin#plan`, target: '_blank', rel: 'noopener' }, 'Plan in Citrus ▸'),
+  content.push(h('div', { class: 'row wrap' }, family() ? h('a', { class: 'btn grow', href: `${CITRUS_URL}?from=mandarin#plan`, target: '_blank', rel: 'noopener' }, 'Plan in Citrus ▸') : null,
     known && !past && info.hasRota ? h('button', { class: 'btn grow', onClick: () => { topSheet()?.remove(); swapHelper(date); } }, 'Who could cover?') : null,
     known ? h('button', { class: 'btn grow', onClick: () => { topSheet()?.remove(); swapSheet(date); } }, info.mine?.swap ? 'Edit correction' : 'Correct this day') : null));
   const r = sheet(content); r.box.parentElement.dataset.daySheet = k;
@@ -1665,7 +1690,7 @@ function renderMore() {
       h('option', { value: '' }, '— choose —'), ...Object.entries(byUnit).map(([u, ps]) => h('optgroup', { label: UNIT_LABEL[u] || u }, ...ps.map(p => h('option', { value: p.key, selected: isMe(s, p) }, `${p.name}${p.title ? ' · ' + p.title : ''}${p.id ? ' · ' + p.id : ''}`))))),
       h('div', { class: 'row', style: { marginTop: '8px' } }, h('button', { class: 'btn sm', onClick: () => mePicker() }, '🔎 Find my row'), s.me ? h('span', { class: 'tiny dim grow' }, `Now: ${s.me.name}${s.me.id ? ` · ID ${s.me.id}` : ''}`) : null)) : h('div', { class: 'muted small' }, Object.keys(s.rotas).length ? 'Only the nurses’ schedule is loaded: import the GP rota to pick your row.' : 'Import a rota first')));
   out.push(alarmsCard());
-  out.push(h('div', { class: 'card' }, h('div', { class: 'title' }, 'Your apps'),
+  if (family()) out.push(h('div', { class: 'card' }, h('div', { class: 'title' }, 'Your apps'),
     h('div', { class: 'small muted' }, 'Mandarin owns everything from the rotas. It writes hub/mandarin/status.json (what Citrus shows: today, tomorrow, week hours, what is waiting) and shifts.json (your shifts and the roster for the next weeks, for Citrus, Clementine and Calamansi). It reads only the Claude inbox, Citrus’s plan and the contact cards, and never writes into another app’s files.'),
     h('div', { class: 'row wrap', style: { marginTop: '8px' } }, h('a', { class: 'btn sm', href: `${CITRUS_URL}?from=mandarin`, target: '_blank', rel: 'noopener' }, '🍊 Open Citrus'), signed ? h('button', { class: 'btn sm', onClick: () => publish().then(() => toast('Published', 'ok')).catch(e => toast(e.message, 'err')) }, 'Publish now') : null)));
   out.push(diagnosticsCard());
@@ -1674,7 +1699,7 @@ function renderMore() {
       h('button', { class: 'btn', onClick: downloadBackup }, '⬇ Backup'),
       (() => { const inp = h('input', { type: 'file', accept: '.json,application/json', style: { display: 'none' }, onChange: async (e) => { const f = e.target.files[0]; e.target.value = ''; if (!f) return; let j; try { j = JSON.parse(await f.text()); } catch { return toast(`${f.name} is not a backup file (it isn’t JSON)`, 'err'); } if (j?.app !== 'mandarin' && MIG.looksLikeCitrus(j)) { migrationOffered = false; offerMigration(j, f.name); return; } restoreSheet(j, { source: f.name }); } }); return h('span', {}, inp, h('button', { class: 'btn', title: 'A Mandarin backup, or a Citrus backup to bring your work over', onClick: () => inp.click() }, '⬆ Restore or import')); })(),
       preRestore() ? h('button', { class: 'btn', title: `Your data as it was before the restore on ${new Date(preRestore().at).toLocaleString('en-GB')}`, onClick: undoRestore }, '↶ Undo restore') : null,
-      signed ? h('button', { class: 'btn', onClick: migrateNow }, '🍊 Bring work over from Citrus') : null,
+      signed && family() ? h('button', { class: 'btn', onClick: migrateNow }, '🍊 Bring work over from Citrus') : null,
       h('button', { class: 'btn danger', onClick: eraseSheet }, 'Erase this device…')),
     h('div', { class: 'tiny dim', style: { marginTop: '10px' } }, `Mandarin ${VERSION} · Scheduler & Work · your data lives in this browser and your own Google Drive.`)));
   return out;
