@@ -1492,3 +1492,57 @@ nav.tabs button.active::after { content: ""; position: absolute; bottom: 3px; le
   .hero-grid .dial { width: 118px; height: 118px; }
   .card.hero .big { font-size: 24px; }
 }
+
+/* ════════════════════════════════════════ Day moods on Today (18/11/2026)
+   OFF: a calm sage card, the word overgrown with vines that sway; REST (after a night): moon and drifting z's;
+   LEAVE: a low sun over waves; a night shift: stars; a day shift: a warm glow. The facts are written in words beside the art. */
+:root { --sage: #8fc79a; --sage-deep: #5f9e6c; --sage-soft: rgba(143, 199, 154, .14); --leaf: #7cc58a; --leaf-lt: #b5e3a8; --vine: #5aa36a; }
+:root[data-theme="light"] { --sage: #3f8a52; --sage-deep: #2f6e40; --sage-soft: rgba(63, 138, 82, .10); --leaf: #4f9e5f; --leaf-lt: #8fcf86; --vine: #3f8a52; }
+.card.hero.mood-off { background: radial-gradient(120% 90% at 0% 100%, var(--sage-soft) 0%, transparent 60%), radial-gradient(90% 70% at 100% 0%, rgba(181, 227, 168, .07), transparent 60%), var(--card); }
+.card.hero.mood-rest { background: radial-gradient(120% 90% at 100% 0%, var(--night-soft) 0%, transparent 60%), var(--card); }
+.card.hero.mood-leave { background: radial-gradient(110% 90% at 100% 10%, rgba(255, 200, 87, .16) 0%, transparent 55%), var(--card); }
+.card.hero.mood-day { background: radial-gradient(110% 80% at 100% 0%, rgba(255, 200, 87, .14) 0%, transparent 55%), var(--card); }
+/* the OFF word and its plants */
+.off-mark { position: relative; display: inline-block; margin: 2px 0 6px; padding: 0 6px 0 2px; }
+.off-word { font-size: clamp(64px, 20vw, 92px); font-weight: 800; letter-spacing: .02em; line-height: .95; color: var(--sage); position: relative; z-index: 0; }
+.off-vines { position: absolute; left: -4px; right: -10px; bottom: -6px; height: 112%; width: calc(100% + 14px); z-index: 1; overflow: visible; pointer-events: none; }
+.off-vines .vine { fill: none; stroke: var(--vine); stroke-width: 2.2; stroke-linecap: round; }
+.off-vines .grass { fill: none; stroke: var(--vine); stroke-width: 1.6; stroke-linecap: round; opacity: .8; }
+.off-vines .leaf, .sprout .leaf { fill: var(--leaf); }
+.off-vines .leaf.lt, .sprout .leaf.lt { fill: var(--leaf-lt); }
+.off-vines .bud { fill: #f6c3d0; }
+.off-vines .sway { transform-box: fill-box; transform-origin: 50% 100%; animation: sway 7s ease-in-out infinite; }
+.off-vines .sway.b { animation-duration: 8.5s; animation-delay: -2s; } .off-vines .sway.c { animation-duration: 6.2s; animation-delay: -4s; }
+@keyframes sway { 0%, 100% { transform: rotate(-1.6deg); } 50% { transform: rotate(1.8deg); } }
+/* the facts of a free day: next shift, how soon, how rested, where in the run of days off */
+.off-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 10px; max-width: 520px; }
+.off-fact { background: color-mix(in srgb, var(--card2) 70%, transparent); border: 1px solid var(--line); border-radius: 12px; padding: 8px 10px; min-width: 0; }
+.off-fact .k { display: block; font-size: 11px; font-weight: 600; color: var(--dim); letter-spacing: .02em; }
+.off-fact b { display: block; font-size: 15px; font-weight: 700; overflow-wrap: anywhere; }
+.off-fact.next { grid-column: 1 / -1; }
+.mood-off .off-fact.next b { color: var(--sage); }
+.mood-rest .off-fact.next b { color: var(--night); } .mood-leave .off-fact.next b { color: var(--day); }
+@media (min-width: 700px) { .off-facts { grid-template-columns: repeat(4, minmax(0, auto)); } .off-fact.next { grid-column: auto; } }
+/* REST and LEAVE words with their small drawings in the corner */
+.mood-word { font-size: clamp(48px, 15vw, 72px) !important; line-height: 1 !important; letter-spacing: .02em !important; }
+.mood-rest .mood-word { color: var(--night); } .mood-leave .mood-word { color: var(--day); }
+.mood-art { position: absolute; top: 14px; right: 26px; width: 110px; height: 84px; pointer-events: none; opacity: .95; }
+.rest-art .moon { fill: var(--night); opacity: .85; }
+.rest-art .zz { fill: var(--muted); font: 700 14px var(--font); animation: drift 4.5s ease-in-out infinite; }
+.rest-art .z2 { font-size: 11px; animation-delay: -1.5s; } .rest-art .z3 { font-size: 9px; animation-delay: -3s; }
+@keyframes drift { 0%, 100% { transform: translateY(0); opacity: .9; } 50% { transform: translateY(-4px); opacity: .45; } }
+.leave-art .sun { fill: var(--day); opacity: .9; }
+.leave-art .wave { fill: none; stroke: var(--blue); stroke-width: 2.4; stroke-linecap: round; opacity: .8; } .leave-art .w2 { opacity: .55; } .leave-art .w3 { opacity: .35; }
+/* night shift: a faint star field behind everything */
+.mood-bg.stars { position: absolute; inset: 0 0 auto 0; width: 100%; height: 120px; pointer-events: none; z-index: 0; }
+.mood-bg.stars .st { fill: #dfe3ff; opacity: .5; animation: twinkle 5s ease-in-out infinite; }
+.mood-bg.stars .t1 { animation-delay: -1.7s; } .mood-bg.stars .t2 { animation-delay: -3.3s; opacity: .3; }
+@keyframes twinkle { 0%, 100% { opacity: .55; } 50% { opacity: .15; } }
+:root[data-theme="light"] .mood-bg.stars .st { fill: var(--night); }
+.card.hero > *:not(.mood-bg):not(.mood-art) { position: relative; z-index: 1; }
+/* days off on the calendar and the week strip: a sprout instead of a dot */
+.sprout { width: 14px; height: 14px; display: block; margin: 0 auto; }
+.sprout .vine { fill: none; stroke: var(--vine); stroke-width: 1.6; stroke-linecap: round; }
+.cal .day .code.off, .wk .code.off { display: grid; place-items: center; }
+@media (prefers-reduced-motion: reduce) { .off-vines .sway, .rest-art .zz, .mood-bg.stars .st { animation: none; } }
+:root[data-ui="arcade"] .off-word { font-family: "Pixelify Sans", var(--font); }

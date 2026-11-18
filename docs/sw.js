@@ -1,6 +1,6 @@
 // Mandarin service worker: precached app shell, network-first with a short timeout, Google Fonts cached for offline,
 // and the share target: rota files shared from WhatsApp or Files arrive as a POST to ./share, are kept for one read, and the app imports them.
-const CACHE = 'mandarin-076face5d9';
+const CACHE = 'mandarin-3c2b1fff9d';
 const FONTS = 'mandarin-fonts-v1';
 const SHARE = 'mandarin-share';   // files shared to the app, read once by the page   // kept across releases: font files are immutable, no need to fetch them again
 const FONT_CSS = 'https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700;800&family=Pixelify+Sans:wght@500;700&family=Source+Sans+3:wght@400;600;700&family=JetBrains+Mono:wght@500&display=swap';
@@ -8,7 +8,7 @@ const FONT_CSS = 'https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;
 const CORE = ['./', './index.html', './css/app.css', './js/app.js', './js/util.js', './manifest.webmanifest'];
 // Everything else in docs/js (test/D17.mjs checks this list against the folder). Fetched one by one so a
 // file that was renamed or merged away does not block the install; it just is not cached.
-const JS = ['backup-check','board','career-plus-ui','career-ui','career','changes-ui','changes','creds','custom','cv','daily-ui','daily','daymap','directory','google','hub','ics','inbound','inbox','labor-ui','labor','migrate','model','month-ui','nurse-board','nurses','payslips','people-logic','people-ui','plans-ui','plans','rota-codes','rota-parser','shiftlog','store-alerts','store','swaplog','team-ui','team','today-model','xlsx-lite'];
+const JS = ['backup-check','board','career-plus-ui','career-ui','career','changes-ui','changes','creds','custom','cv','daily-ui','daily','daymap','directory','google','hub','ics','inbound','inbox','labor-ui','labor','migrate','model','month-ui','moods','nurse-board','nurses','payslips','people-logic','people-ui','plans-ui','plans','rota-codes','rota-parser','shiftlog','store-alerts','store','swaplog','team-ui','team','today-model','xlsx-lite'];
 const ASSETS = [...JS.map(f => `./js/${f}.js`), './icons/icon.svg', './icons/icon-192.png', './icons/icon-512.png', './icons/icon-512-maskable.png'];
 const NET_TIMEOUT = 2500;   // on weak signal ("lie-fi") serve the cached shell after 2.5 s instead of hanging on the fetch
 

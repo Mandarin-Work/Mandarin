@@ -28,13 +28,14 @@ import * as IN from './inbox.js';
 import * as T from './team.js';
 import * as SL from './shiftlog.js';
 import * as SW from './swaplog.js';
+import * as MOOD from './moods.js';
 import * as MV from './month-ui.js';
 import * as TV from './team-ui.js';
 import { shiftsIcs } from './ics.js';
 import { checkBackup, describeCounts } from './backup-check.js';
 import { h, toast, keyOf, fromKey, addDays, startOfDay, sameDay, fmtDate, fmtDateShort, fmtTime, fmtMin, fmtDur, relDay, pad2, DAY_SHORT, DAY_NAMES, MONTHS, telLink, firstName, atMin, minsOf, uid } from './util.js';
 
-export const VERSION = '1.2.0';
+export const VERSION = '1.3.0';
 /** Uses the owner's other apps (Citrus, the Claude inbox)? Someone using Mandarin on its own never sees Citrus buttons or wording. */
 const family = () => !!(rt.fromCitrus || S().settings.family || (S().migrated && S().migrated.from !== 'skipped'));
 const CITRUS_URL = 'https://amaerys.github.io/citrus-maxima/';
@@ -899,6 +900,25 @@ function tomorrowText(now, tmr) {
  * The hero describes the shift that matters NOW (today-model.js heroFocus): the night you are still on after midnight,
  * today's shift until it ends, then tomorrow's. Its team, progress bar and dial all follow that shift (beta T01-02, T01-18, T10-02).
  */
+/** What a free day is worth knowing at a glance: the next shift and how far off it is, how long you've rested, and where you are in this run of days off. */
+function offFacts(now) {
+  const s = S(), today0 = startOfDay(now);
+  let next = null, last = null, runBefore = 0, runAfter = 0;
+  for (let i = 0; i <= 21 && !next; i++) { const t = myDay(s, addDays(today0, i)).today; if (t?.window && t.window.start > now) next = t; }
+  for (let i = 0; i <= 21 && !last; i++) { const d = addDays(today0, -i), md = myDay(s, d); const t = md.today?.window && md.today.window.end <= now ? md.today : md.overnightTail?.window?.end <= now ? md.overnightTail : null; if (t) last = t; }
+  const isFree = (d) => { const md = myDay(s, d); return md.info.hasRota && !md.today?.window && !md.noHours; };   // a month with no rota is unknown, not free
+  for (let i = 1; i <= 14 && isFree(addDays(today0, -i)); i++) runBefore++;
+  for (let i = 1; i <= 14 && isFree(addDays(today0, i)); i++) runAfter++;
+  const run = runBefore + runAfter + 1;
+  const fact = (k, v, cls = '') => h('div', { class: `off-fact ${cls}` }, h('span', { class: 'k' }, k), h('b', {}, v));
+  const until = next ? Math.round((next.window.start - now) / 60000) : 0, rested = last ? Math.round((now - last.window.end) / 60000) : 0;
+  const dur = (m) => m >= 2880 ? `${Math.round(m / 1440)} days` : fmtDur(m);
+  return h('div', { class: 'off-facts' },
+    next ? fact('Back to work', `${keyOf(next.window.start) === keyOf(addDays(today0, 1)) ? 'Tomorrow' : DAY_NAMES[next.window.start.getDay()]} · ${next.code} ${fmtTime(next.window.start)}`, 'next') : fact('Back to work', 'Nothing in the rota yet'),
+    next ? fact('In', dur(until)) : null,
+    last ? fact('Rested', dur(rested)) : null,
+    run > 1 ? fact('Days off', `${runBefore + 1} of ${run}`) : fact('Days off', 'Just today'));
+}
 function heroCard(now, md = myDay(S(), now)) {
   const s = S(), { info } = md, tmr = myDay(s, addDays(now, 1)), prevInfo = dayInfo(s, addDays(now, -1));
   const f = TM.heroFocus(now, md, tmr, prevInfo), missing = s.me ? meMissing(info) : null, gpNow = TM.hasGpRota(info) || !!info.mine;
@@ -924,13 +944,17 @@ function heroCard(now, md = myDay(S(), now)) {
   } else if (!info.hasRota && md.overnightTail) say(h('div', { class: 'big' }, 'Off, after a night'), h('div', { class: 'sub' }, `Your night ended ${fmtTime(md.overnightTail.window.end)}. No rota for ${MONTHS[now.getMonth()]} yet: import it to see the rest of the month.`));
   else if (!info.hasRota) say(h('div', { class: 'big' }, `No rota for ${MONTHS[now.getMonth()]} yet`), h('div', { class: 'sub' }, 'Import the Excel files, or drop them in Drive › My Apps › Rotas.'), h('div', { style: { marginTop: '10px' } }, importButton()));
   else if (!gpNow) say(h('div', { class: 'big' }, `No GP rota for ${MONTHS[now.getMonth()]}`), h('div', { class: 'sub' }, 'Other schedules are loaded, but your shifts come from the GP rota.'), h('div', { style: { marginTop: '10px' } }, importButton()));
-  else if (info.mine && info.mine.shift.kind === 'leave') say(h('div', { class: 'big' }, info.mine.shift.label), h('div', { class: 'sub' }, 'Enjoy it.'));
+  else if (info.mine && info.mine.shift.kind === 'leave') { hero.classList.add('mood-leave'); hero.append(MOOD.leaveMark()); say(h('div', { class: 'big mood-word' }, 'LEAVE'), h('div', { class: 'sub' }, info.mine.shift.label && !/^leave$/i.test(info.mine.shift.label) ? `${info.mine.shift.label}. Enjoy it.` : 'Enjoy it.'), offFacts(now)); }
   else if (md.noHours) say(h('div', { class: 'big' }, md.noHours.shift.label || md.noHours.code), h('div', { class: 'sub' }, `A working day (${md.noHours.code}); the rota gives no hours for it.`));
-  else say(h('div', { class: 'big' }, md.afterNight ? 'Off, after a night' : 'Day off'), h('div', { class: 'sub' }, md.afterNight ? `Your night ended ${fmtTime(md.overnightTail.window.end)}. Recover first; the plan stays light.` : 'A free day: Citrus plans it, Mandarin keeps the rota.'));
+  else if (md.afterNight) { hero.classList.add('mood-rest'); hero.append(MOOD.restMark()); say(h('div', { class: 'big mood-word' }, 'REST'), h('div', { class: 'sub' }, `Off after your night, which ended ${fmtTime(md.overnightTail.window.end)}. Sleep first; the day stays light.`), offFacts(now)); }
+  else { hero.classList.add('mood-off'); say(MOOD.offMark('OFF'), offFacts(now)); }
   // what comes next: tonight's shift while you're still on last night's; otherwise tomorrow
   if (f.kind === 'tail' && md.today) say(h('div', { class: 'small hero-next' }, h('span', { class: 'muted' }, 'Next '), nbTimes(shiftText(md.today.shift)), ` · in ${fmtDur(Math.max(1, Math.round((md.today.window.start - now) / 60000)))}`));
-  else if (f.kind !== 'tomorrow' && !missing) { const t = tomorrowText(now, tmr); if (t) say(h('div', { class: 'small hero-next' }, h('span', { class: 'muted' }, 'Tomorrow '), typeof t === 'string' ? nbTimes(t) : t)); }
-  hero.append(h('div', { class: 'hero-grid' }, words, gpNow && s.me && !missing ? dayDial(now) : null));
+  else if (f.kind !== 'tomorrow' && !missing && !hero.classList.contains('mood-off') && !hero.classList.contains('mood-rest') && !hero.classList.contains('mood-leave')) { const t = tomorrowText(now, tmr); if (t) say(h('div', { class: 'small hero-next' }, h('span', { class: 'muted' }, 'Tomorrow '), typeof t === 'string' ? nbTimes(t) : t)); }
+  if (f.entry?.shift.type === 'N' && (f.kind === 'today' || f.kind === 'tail')) { hero.classList.add('mood-night'); hero.prepend(MOOD.starField()); }
+  else if (f.entry?.shift.type === 'D' && (f.kind === 'today' || f.kind === 'done')) hero.classList.add('mood-day');
+  const offDay = hero.classList.contains('mood-off') || hero.classList.contains('mood-rest') || hero.classList.contains('mood-leave');
+  hero.append(h('div', { class: 'hero-grid' }, words, gpNow && s.me && !missing && !offDay ? dayDial(now) : null));
   const nu = nextUp(now); if (nu) hero.append(nu);
   if (!missing && f.kind !== 'done' && f.kind !== 'none') { const tm = heroTeam(f); if (tm) hero.append(tm); }
   if (s.me) hero.append(weekStrip(now));
@@ -1072,7 +1096,7 @@ function weekStrip(from) {
     const cls = unknown ? 'unk' : !sh || sh.kind === 'off' ? 'off' : sh.kind === 'leave' ? 'leave' : (/^[DNE]$/.test(sh.type) ? sh.type : 'other');
     strip.append(h('button', { class: `wd ${i === 0 ? 'today' : ''} ${unknown ? 'unk' : ''}`, 'aria-label': dayLabel(d, info), title: unknown ? `No rota for ${MONTHS[d.getMonth()]} yet` : null, onClick: () => { rt.rotaSel = d; daySheet(d); } },
       h('div', { class: 'd' }, DAY_SHORT[d.getDay()]), h('div', { class: 'n' }, d.getDate()),
-      h('span', { class: `code ${cls}`, style: cls === 'off' ? { color: 'var(--dim)' } : {}, title: info.mine?.code || null }, unknown ? '?' : !info.mine || sh.kind === 'off' ? '·' : sh.kind === 'leave' ? 'L' : shortCode(info.mine.code)),
+      h('span', { class: `code ${cls}`, title: info.mine?.code || null }, unknown ? '?' : !info.mine || sh.kind === 'off' ? MOOD.sprout() : sh.kind === 'leave' ? 'L' : shortCode(info.mine.code)),
       sh?.kind === 'work' && sh.hours ? h('small', { class: 'wh' }, `${Math.round(sh.hours.durationMin / 60)}h`) : null));
   }
   // this Sunday–Saturday week (the labour-law week) against the weekly limit; the strip above runs from today, so the bar names its own dates (beta T01-15)
@@ -1235,7 +1259,7 @@ function calCell(date, info, known, todayK) {
   const s = S(), k = keyOf(date), mine = known ? info.mine : null, shift = mine?.shift, pen = !mine ? pencilled(s, k) : null;
   const tail = known && (!shift || shift.kind === 'off') ? myDay(s, date).overnightTail : null;
   const cls = pen ? 'leave' : !known ? 'unk' : !shift || shift.kind === 'off' ? 'off' : shift.kind === 'leave' ? 'leave' : (/^[DNE]$/.test(shift.type) ? shift.type : 'other');
-  const txt = pen ? 'L' : !known ? '?' : !shift || shift.kind === 'off' ? '·' : shift.kind === 'leave' ? 'L' : shortCode(mine.code);
+  const txt = pen ? 'L' : !known ? '?' : !shift || shift.kind === 'off' ? MOOD.sprout() : shift.kind === 'leave' ? 'L' : shortCode(mine.code);
   const evs = rt.events[k] || [], plan = citrusBlocks(date), logged = !!s.shiftLog?.[k]?.rating, withN = mine && shift.kind === 'work' ? overlapCount(info) : 0, site = mine && shift.kind === 'work' ? siteNoOf(mine.code) : 0;
   const open = () => { rt.rotaSel = date; daySheet(date); };
   const flags = [k === todayK ? 'today' : '', k < todayK ? 'past' : '', [5, 6].includes(date.getDay()) ? 'weekend' : '', rt.rotaSel && keyOf(rt.rotaSel) === k ? 'sel' : '', mine?.mci ? 'mci' : '', mine?.swap || pen ? `swap sk-${SW.kindOf(S().swaps?.[k]) || 'fix'}` : '', tail ? 'tail' : '', logged ? 'logged' : ''].filter(Boolean).join(' ');
